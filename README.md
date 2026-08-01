@@ -1,36 +1,82 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Topfy Affiliate OS
 
-## Getting Started
+Sistema operacional de afiliados internacionais: do produto à publicação, com
+inteligência — um funil supervisionado de ponta a ponta.
 
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+oportunidade → validação → ficha do produto → landing + copy → sugestão de propaganda → acompanhamento automático → decisão
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Fase atual
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+**Fase 1 — MVP (fluxo vertical).** Colar URL de produto (AliExpress) →
+extração via API oficial → link de afiliado verificado → Topfy Score →
+3 cópias (Ollama + fallback) → card (Pictify) → página pública →
+publicação (Telegram real + WhatsApp assistido) → clique rastreado → analytics.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Monorepo
 
-## Learn More
+```
+apps/web     Next.js 16 + TypeScript + Tailwind + shadcn/ui (dashboard, vitrine, /r/<id>)
+apps/worker  Python 3.11 — conectores, score, copy, fila, publicações
+packages/db  Migrations PostgreSQL (Supabase)
+docs         Decisões, arquitetura, roadmap, segurança
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Como rodar
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 1. Banco (Supabase cloud)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Crie um projeto em https://supabase.com (plano free).
+2. Rode as migrations de `packages/db/migrations/` no SQL Editor
+   (`0001_schema.sql`, depois `0002_rls.sql`).
+3. Copie `.env.example` para `.env` e preencha `SUPABASE_URL`,
+   `SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY`.
 
-## Deploy on Vercel
+### 2. Web
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm install
+npm run build --workspace apps/web
+npm run dev --workspace apps/web
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### 3. Worker
+
+```bash
+cd apps/worker
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+pip install -r requirements.txt
+python -m main                # consome a fila de jobs
+```
+
+### 4. IA local (opcional)
+
+Instale [Ollama](https://ollama.com) e puxe o modelo:
+
+```bash
+ollama pull llama3.2
+```
+
+Sem Ollama, o worker gera copy determinística (nunca inventa fato).
+
+## Regras de segurança
+
+- Nenhuma automação publica conteúdo, ativa anúncios ou aumenta orçamento
+  sem aprovação humana explícita.
+- Toda integração tem modo `simulated`; `production` exige credencial
+  configurada e confirmação explícita.
+- Nada é inventado: preço, comissão, desconto, tendência e rank só entram
+  com fonte verificada (API oficial) ou marcação manual explícita.
+- O banco é a fonte da verdade; toda automação gera `audit_log`.
+
+## Documentação
+
+| O quê | Arquivo |
+| --- | --- |
+| Arquitetura | `docs/ARCHITECTURE.md` |
+| Roadmap | `docs/ROADMAP.md` |
+| Banco de dados | `docs/DATABASE.md` |
+| Segurança | `docs/SECURITY.md` |
+| Integrações | `docs/API_INTEGRATIONS.md` |

@@ -1,41 +1,31 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Segredos e ambiente
+.env
+.env.local
+.env*.local
 
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+# Build
+node_modules/
+.next/
+dist/
+out/
 
-# testing
-/coverage
+# Python / worker
+.venv/
+__pycache__/
+*.pyc
+*.db
 
-# next.js
-/.next/
-/out/
+# Banco de dados local (fora do Supabase)
+db/*.db
+db/*.db-wal
+db/*.db-shm
 
-# production
-/build
-
-# misc
+# Sistema operacional / editor
 .DS_Store
-*.pem
+Thumbs.db
+.vscode/
+.idea/
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
+# Deploy
 .vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+.wrangler/
