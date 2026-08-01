@@ -82,13 +82,17 @@ create policy "publications_via_campaign" on publications
     ));
 
 -- ------------------------------------------------------------
--- clicks/conversions: somente escrita via service role (worker);
--- leitura para membros da org da campanha
+-- clicks/conversions: escrita via service role (worker) ou anon
+-- (público visita /r/<id> e gera clique); leitura para membros
+-- da org da campanha
 -- ------------------------------------------------------------
 create policy "clicks_read_org" on affiliate_clicks
     for select using (campaign_id in (
         select id from campaigns where organization_id = public.current_org_id()
     ));
+
+create policy "clicks_insert_anon" on affiliate_clicks
+    for insert with check (true);
 
 create policy "conversions_read_org" on conversions
     for select using (campaign_id in (
@@ -96,10 +100,14 @@ create policy "conversions_read_org" on conversions
     ));
 
 -- ------------------------------------------------------------
--- jobs/audit_log: membros leem; escrita do worker via service role
+-- jobs/audit_log: membros leem e criam; worker escreve via service role
 -- ------------------------------------------------------------
 create policy "jobs_read_org" on jobs
     for select using (organization_id = public.current_org_id());
+create policy "jobs_insert_org" on jobs
+    for insert with check (organization_id = public.current_org_id());
 
 create policy "audit_read_org" on audit_log
     for select using (organization_id = public.current_org_id());
+create policy "audit_insert_org" on audit_log
+    for insert with check (organization_id = public.current_org_id());

@@ -21,10 +21,10 @@ Regras de segurança (spec):
 from __future__ import annotations
 
 import os
-import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
+import db
 from connectors import CredencialNaoConfigurada
 from connectors.aliexpress import AliExpressConnector
 from content import gerar_copy, validar_copy
