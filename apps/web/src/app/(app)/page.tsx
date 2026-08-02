@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { connectMercadoLivre } from "@/lib/actions";
 import {
   Card,
   CardContent,
+  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -45,6 +47,14 @@ export default async function DashboardPage() {
     .select("id, title, status, created_at")
     .order("created_at", { ascending: false })
     .limit(5);
+
+  const { data: mlCred } = await supabase
+    .from("ml_credentials")
+    .select("expires_at")
+    .maybeSingle();
+  const mlConectado = Boolean(mlCred);
+  const mlExpirado =
+    mlCred && mlCred.expires_at && new Date(mlCred.expires_at) <= new Date();
 
   return (
     <div className="space-y-8">
@@ -90,6 +100,34 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Mercado Livre</CardTitle>
+          <CardDescription>
+            Importação manual de produtos (automação é proibida pela
+            plataforma). Conecte a conta para importar links com seu código
+            de afiliado.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between gap-4">
+          {mlConectado ? (
+            <Badge variant={mlExpirado ? "destructive" : "secondary"}>
+              {mlExpirado ? "Conectado (token expirado)" : "Conectado"}
+            </Badge>
+          ) : (
+            <Badge variant="outline">Não conectado</Badge>
+          )}
+          <form action={connectMercadoLivre}>
+            <button
+              type="submit"
+              className="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium transition-colors hover:bg-muted"
+            >
+              {mlConectado ? "Reconectar" : "Conectar"}
+            </button>
+          </form>
+        </CardContent>
+      </Card>
 
       <div className="space-y-4">
         <h2 className="text-lg font-semibold">Campanhas recentes</h2>

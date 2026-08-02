@@ -1,14 +1,27 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
+import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 
 const URL_PRODUTO = z.string().url().refine(
-  (url) => url.includes("aliexpress."),
-  { message: "Por enquanto aceitamos apenas URLs da AliExpress." },
+  (url) => url.includes("aliexpress.") ||
+    url.includes("mercadolivre.") || url.includes("mercadolibre."),
+  {
+    message:
+      "Por enquanto aceitamos URLs da AliExpress ou do Mercado Livre.",
+  },
 );
+
+function sourceNameFromUrl(url: string): string {
+  if (url.includes("aliexpress.")) {
+    return "aliexpress";
+  }
+  return "mercadolivre";
+}
 
 export type AuthActionState = { error?: string };
 
@@ -70,6 +83,40 @@ export async function signOut() {
   redirect("/login");
 }
 
+export async function connectMercadoLivre() {
+  const clientId = process.env.ML_CLIENT_ID;
+  const redirectUri = process.env.ML_REDIRECT_URI;
+  if (!clientId || !redirectUri) {
+    redirect("/?ml=not_configured");
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/login");
+  }
+
+  const state = randomUUID();
+  const cookieStore = await cookies();
+  cookieStore.set("ml_oauth_state", state, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 600,
+  });
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    state,
+  });
+
+  redirect(`https://auth.mercadolivre.com.br/authorization?${params.toString()}`);
+}
+
 export type CampaignActionState = { error?: string; ok?: boolean };
 
 export async function createCampaignFromUrl(
@@ -83,6 +130,7 @@ export async function createCampaignFromUrl(
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "URL inválida." };
   }
+  const sourceName = sourceNameFromUrl(url);
 
   const {
     data: { user },
@@ -105,7 +153,7 @@ export async function createCampaignFromUrl(
     .from("products")
     .insert({
       organization_id: profile.organization_id,
-      source_name: "aliexpress",
+      source_name: sourceName,
       source_url: url,
       method: "MANUAL",
       confidence: "UNKNOWN",
@@ -120,15 +168,18 @@ export async function createCampaignFromUrl(
     return { error: "Não foi possível criar o produto." };
   }
 
+  const campaignId = randomUUID();
   const { data: campaign, error: campaignError } = await supabase
     .from("campaigns")
     .insert({
+      id: campaignId,
       organization_id: profile.organization_id,
       product_id: product.id,
       status: "IMPORTED",
       platform: "telegram",
       mode: "simulated",
       title: "Nova campanha",
+      slug: campaignId,
     })
     .select()
     .single();
@@ -140,7 +191,7 @@ export async function createCampaignFromUrl(
   const { error: jobError } = await supabase.from("jobs").insert({
     organization_id: profile.organization_id,
     type: "product.import",
-    payload: { source_name: "aliexpress", url },
+    payload: { source_name: sourceName, url },
   });
 
   if (jobError) {

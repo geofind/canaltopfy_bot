@@ -13,7 +13,8 @@ from typing import Any
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    from pathlib import Path
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 except ImportError:
     pass
 

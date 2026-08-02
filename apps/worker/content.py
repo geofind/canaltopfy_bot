@@ -1,8 +1,9 @@
-"""Topfy Affiliate OS — geração de copy com IA (Ollama) + fallback determinístico.
+"""Topfy Affiliate OS — geração de copy com IA (OpenRouter) + fallback determinístico.
 
 Regras do spec:
-- provider abstrato: ollama (local) primeiro, fallback determinístico quando
-  Ollama não responde — nunca inventa fato (preço/desconto/avaliação).
+- provider abstrato: OpenRouter (grátis/pago, hospedado) primeiro, fallback
+  determinístico quando OpenRouter não responde — nunca inventa fato
+  (preço/desconto/avaliação).
 - toda copy gerada passa por validar_copy (disclaimer + frases proibidas).
 - campo ausente vira "a confirmar" ou não entra na frase — nunca número
   inventado.
@@ -31,7 +32,9 @@ FRASES_PROIBIDAS = (
 
 TEMPLATES = ("oferta-padrao", "oferta-curta", "oferta-beneficios")
 
-ALLOWED_PROVIDERS = ("auto", "ollama", "openai", "anthropic", "fallback", "manual")
+ALLOWED_PROVIDERS = ("auto", "openrouter", "openai", "anthropic", "fallback", "manual")
+
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 def _fmt_preco(valor: Optional[float]) -> str:
@@ -99,38 +102,45 @@ def _gerar_fallback(product: dict[str, Any], template_id: str, seed: Optional[in
     }
 
 
-def _ollama_disponivel() -> bool:
-    return bool(os.environ.get("OLLAMA_BASE_URL"))
+def _openrouter_disponivel() -> bool:
+    return bool(os.environ.get("OPENROUTER_API_KEY"))
 
 
-def _gerar_ollama(product: dict[str, Any], template_id: str) -> Optional[dict[str, str]]:
-    """Chama o modelo local com um prompt estrito — a resposta é validada
-    depois por validar_copy e por fatos; qualquer coisa fora do padrão
-    cai no fallback."""
-    base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-    model = os.environ.get("OLLAMA_MODEL", "llama3.2")
+def _gerar_openrouter(product: dict[str, Any], template_id: str) -> Optional[dict[str, str]]:
+    """Chama a API da OpenRouter (openrouter.ai — agregador de LLMs, API
+    compatível com o formato OpenAI) com um prompt estrito — a resposta é
+    validada depois por validar_copy e por fatos; qualquer coisa fora do
+    padrão cai no fallback. Modelo configurável via OPENROUTER_MODEL —
+    confirme o slug de modelo grátis vigente em openrouter.ai/models."""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    model = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat:free")
     prompt = (
         "Você escreve copy de afiliado em português do Brasil. Use APENAS "
         "os fatos abaixo — NUNCA invente preço, desconto, avaliação, prazo "
-        "ou estoque. Saída em JSON: {\"headline\": string, \"body\": string, "
-        "\"cta\": string}. Disclaimer obrigatório no fim do body: \"Link de "
-        "afiliado: se você comprar por aqui, o Topfy pode ganhar uma "
-        "comissão, sem custo extra para você.\"\n\n"
+        "ou estoque. Responda APENAS com um objeto JSON, sem texto fora "
+        "dele: {\"headline\": string, \"body\": string, \"cta\": string}. "
+        "Disclaimer obrigatório no fim do body: \"Link de afiliado: se "
+        "você comprar por aqui, o Topfy pode ganhar uma comissão, sem "
+        "custo extra para você.\"\n\n"
         f"Fatos:\n{json.dumps(product, ensure_ascii=False)}"
     )
     body = json.dumps({
         "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "format": "json",
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
     }).encode("utf-8")
     req = urllib.request.Request(
-        f"{base}/api/generate", data=body, method="POST",
-        headers={"Content-Type": "application/json"})
+        OPENROUTER_API_URL, data=body, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "X-Title": "Topfy Affiliate OS",
+        })
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             bruto = json.loads(resp.read().decode("utf-8"))
-        resposta = json.loads(bruto.get("response", "{}"))
+        conteudo = bruto["choices"][0]["message"]["content"]
+        resposta = json.loads(conteudo)
         return {
             "template_id": template_id,
             "headline": resposta.get("headline", ""),
@@ -138,7 +148,7 @@ def _gerar_ollama(product: dict[str, Any], template_id: str) -> Optional[dict[st
             "cta": resposta.get("cta", "Ver oferta"),
             "disclaimer": DISCLAIMER_PADRAO,
         }
-    except (urllib.error.URLError, json.JSONDecodeError, ValueError):
+    except (urllib.error.URLError, json.JSONDecodeError, ValueError, KeyError, IndexError):
         return None
 
 
@@ -149,7 +159,7 @@ def gerar_copy(
     provider: str = "auto",
     seed: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Gera a copy. provider='auto': tenta ollama e cai no fallback;
+    """Gera a copy. provider='auto': tenta openrouter e cai no fallback;
     'fallback'/'manual': só determinístico (para testes e modo offline)."""
     if template_id not in TEMPLATES:
         raise ValueError(f"template desconhecido: {template_id!r} (use um de {TEMPLATES})")
@@ -164,13 +174,13 @@ def gerar_copy(
             "model": None,
         }
 
-    if provider == "auto" or provider == "ollama":
-        if _ollama_disponivel():
-            resultado = _gerar_ollama(product, template_id)
+    if provider == "auto" or provider == "openrouter":
+        if _openrouter_disponivel():
+            resultado = _gerar_openrouter(product, template_id)
             if resultado and not validar_copy(resultado):
-                return {**resultado, "provider": "ollama", "model": os.environ.get("OLLAMA_MODEL")}
-        if provider == "ollama":
-            raise RuntimeError("ollama não respondeu — use provider='auto' para fallback.")
+                return {**resultado, "provider": "openrouter", "model": os.environ.get("OPENROUTER_MODEL")}
+        if provider == "openrouter":
+            raise RuntimeError("openrouter não respondeu — use provider='auto' para fallback.")
         return {**(_gerar_fallback(product, template_id, seed)), "provider": "fallback", "model": None}
 
     return {**(_gerar_fallback(product, template_id, seed)), "provider": "fallback", "model": None}

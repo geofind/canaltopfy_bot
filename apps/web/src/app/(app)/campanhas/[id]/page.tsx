@@ -325,6 +325,7 @@ export default async function CampaignDetailPage({
                   campaignId={campanha.id}
                   contentId={aprovadoContent.id}
                   canPublish={canPublish}
+                  defaultChatId={process.env.TELEGRAM_CHAT_ID ?? ""}
                 />
               ) : (
                 <p className="text-center text-sm text-muted-foreground">

@@ -1,8 +1,37 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Badge } from "@/components/ui/badge";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const supabase = await createClient();
+
+  const { data: campanha } = await supabase
+    .from("campaigns")
+    .select("id, title")
+    .eq("slug", slug)
+    .eq("public_page", true)
+    .maybeSingle();
+
+  if (!campanha) {
+    return {};
+  }
+
+  return {
+    title: campanha.title,
+    openGraph: {
+      title: campanha.title,
+      images: [{ url: `/og/card/${campanha.id}`, width: 1024, height: 1024 }],
+    },
+  };
+}
 
 export default async function ShowcasePage({
   params,

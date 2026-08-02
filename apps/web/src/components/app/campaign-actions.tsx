@@ -43,10 +43,12 @@ export function SchedulePublicationForm({
   campaignId,
   contentId,
   canPublish,
+  defaultChatId,
 }: {
   campaignId: string;
   contentId: string;
   canPublish: boolean;
+  defaultChatId?: string;
 }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(
@@ -75,12 +77,16 @@ export function SchedulePublicationForm({
         <input
           id="chat_id"
           name="chat_id"
+          defaultValue={defaultChatId ?? ""}
           placeholder="@seuduacanal ou -1001234567890"
           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
         <p className="text-xs text-muted-foreground">
-          Publicação real no Telegram exige TELEGRAM_BOT_TOKEN configurado no
-          worker. O CTA sempre aponta para o redirect first-party /r/&lt;id&gt;.
+          {defaultChatId
+            ? `Grupo padrão configurado (TELEGRAM_CHAT_ID). `
+            : ""}Publicação real no Telegram exige TELEGRAM_BOT_TOKEN
+          configurado no worker. O CTA sempre aponta para o redirect
+          first-party /r/&lt;id&gt;.
         </p>
       </div>
       <Button type="submit" disabled={pending || !canPublish}>

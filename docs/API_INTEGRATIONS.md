@@ -55,10 +55,46 @@ Exige conta Business/Creator + App Review da Meta
 
 `youtube.activities.insert` (requer OAuth + escopo). Mock até lá.
 
+### Mercado Livre — importação manual (API pública de dados)
+
+- Leitura de anúncio: `GET https://api.mercadolibre.com/items/{id}` — API
+  **oficial e pública** (sem autenticação); id no formato `MLB<digits>`
+  (extraído da URL `produto.mercadolivre.com.br/MLB-<digits>-...`).
+  Campos: título, permalink, thumbnail/pictures, price, original_price,
+  sold_quantity, seller, category_id. Nome de categoria via
+  `GET /categories/{id}` (path_from_root); vendedor via `GET /users/{id}`
+  quando necessário.
+- Método `API` + `source_confidence=VERIFIED` (dados vêm da API oficial).
+  Moeda: a API pública não converte — anúncios fora do Brasil ficam com
+  aviso e preço local.
+- **Link de afiliado**: o programa "Mercado Livre Afiliados" não tem API
+  pública de geração — o usuário cola o link do painel oficial;
+  `verification_status` fica `UNKNOWN` até confirmação manual (nunca
+  `VERIFIED` sem evidência).
+- OAuth2 (seção acima) é só para dados da conta do usuário.
+
 ## Importação manual (sem automação)
 
 - **Mercado Livre**: automação de compra proibida pela plataforma — só
-  importação manual de URL/dados.
+  importação manual de URL/dados (dados lidos da API pública oficial,
+  link de afiliado colado do painel). OAuth2 do app (web) para obter o token
+  da conta do usuário:
+
+  - Autorização: `https://auth.mercadolivre.com.br/authorization?response_type=code&client_id=<ML_CLIENT_ID>&redirect_uri=<ML_REDIRECT_URI>&state=<uuid>`
+    (state random em cookie httpOnly de 10min, validado no callback — CSRF)
+  - Callback: `/callback` no web troca o code por token em
+    `POST https://api.mercadolibre.com/oauth/token`
+    (`grant_type=authorization_code`, form-urlencoded) e guarda em
+    `ml_credentials` (uma linha por organização, RLS por org).
+  - `ML_REDIRECT_URI` deve ser exatamente a URL cadastrada no app em
+    developers.mercadolivre.com.br — em produção, HTTPS obrigatório. O ML
+    **rejeita qualquer endereço que contenha "localhost"**, mesmo com TLD
+    válido (testado: `https://localhost.rip:3000/callback` falhou). No dev
+    local usar domínio de loopback sem essa palavra — `https://lvh.me:3000/callback`
+    passou na validação (resolve para 127.0.0.1) — ou URL do Vercel; o app
+    aceita vários URIs.
+  - `refresh_token` guardado para renovação futura
+    (`grant_type=refresh_token`).
 - **Shopee**: sem API pública de afiliados para o caso — manual.
 
 ## Adiado
@@ -69,6 +105,14 @@ Exige conta Business/Creator + App Review da Meta
 
 ## Card de produto (imagem para as publicações)
 
-- **Pictify** — free tier 50 imagens/mês; plano US$15/mês quando crescer
-- Rejeitados: Bannerbear (US$49+/mês), Placid (marca d'água), Cloudinary
-  (US$89+/mês); alternativa futura grátis: `@vercel/og`
+- **`next/og` (`ImageResponse`)** — embutido no Next.js desde a v14 (usa
+  `@vercel/og`/Satori/Resvg por baixo), MIT, custo zero, sem conta/credencial
+  externa, roda como rota própria em `apps/web`. Confirmado ainda a opção
+  atual contra a documentação oficial do Next.js (`nextjs.org/docs`).
+  Limitações: só subconjunto flexbox de CSS, bundle máx. 500KB, fontes
+  ttf/otf/woff.
+- Rejeitados: **Pictify** (free tier só 50 imagens/mês, depois US$15/mês —
+  correção registrada aqui: era a escolha original, substituída por
+  priorizar built-in/open source sobre serviço pago de terceiro, regra do
+  projeto), Bannerbear (US$49+/mês), Placid (marca d'água no free tier),
+  Cloudinary (US$89+/mês).

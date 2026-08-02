@@ -9,7 +9,7 @@ Etapas deste módulo:
 1. import_product: valida a URL, extrai via conector (API ou MANUAL).
 2. generate_affiliate_link: gera link oficial (ou registra aviso manual).
 3. compute_score: Topfy Score decomposto (bloqueios impedem aprovação).
-4. generate_copies: 3 cópias (provider auto: Ollama + fallback).
+4. generate_copies: 3 cópias (provider auto: OpenRouter + fallback).
 5. validate + approve: humana (spec: aprovação humana obrigatória).
 6. publish: fila de publicações (telegram real / adapters simulados).
 
@@ -27,11 +27,13 @@ from typing import Any
 import db
 from connectors import CredencialNaoConfigurada
 from connectors.aliexpress import AliExpressConnector
+from connectors.mercadolivre import MercadoLivreConnector
 from content import gerar_copy, validar_copy
 from scoring import calcular_score
 
 CONECTORES = {
     "aliexpress": AliExpressConnector,
+    "mercadolivre": MercadoLivreConnector,
 }
 
 
@@ -144,10 +146,18 @@ def approve_campaign(campaign_id: str, content_ids: list[str]) -> None:
 
 def publish_to_telegram(campaign_id: str, content_id: str, chat_id: str) -> dict[str, Any]:
     """Etapa 6 — publicação no Telegram (canal real). CTA aponta para o
-    redirect first-party /r/<id>. Deduplicação por canal."""
+    redirect first-party /r/<id>. Deduplicação por canal. `chat_id` vazio
+    usa TELEGRAM_CHAT_ID (grupo padrão)."""
     from db import get_campaign, get_publication, create_publication
     from db import has_active_publication, mark_publication_result, register_audit
     from publishers.telegram import publicar_oferta_telegram
+
+    if not chat_id:
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not chat_id:
+        raise ValueError(
+            "publicar no Telegram exige chat_id — informe o destino ou "
+            "defina TELEGRAM_CHAT_ID no .env")
 
     campanha = get_campaign(campaign_id)
     if not campanha:
@@ -170,15 +180,15 @@ def publish_to_telegram(campaign_id: str, content_id: str, chat_id: str) -> dict
     pub_id = pub["id"]
 
     try:
-        produto = db.get_product(campanha["product_id"]) or {}
-        redirect_url = (
-            f"{os.environ.get('CANALTOPFY_PUBLIC_BASE_URL', 'http://localhost:3000')}"
-            f"/r/{pub_id}")
+        base_url = os.environ.get(
+            "CANALTOPFY_PUBLIC_BASE_URL", "http://localhost:3000")
+        redirect_url = f"{base_url}/r/{pub_id}"
+        card_url = f"{base_url}/og/card/{campaign_id}"
         resultado = publicar_oferta_telegram(
             copy=_load_content(content_id),
             chat_id=chat_id,
             redirect_url=redirect_url,
-            image_url=produto.get("image_url"),
+            image_url=card_url,
         )
     except Exception as exc:
         mark_publication_result(pub_id, {"status": "FAILED", "error": str(exc)})

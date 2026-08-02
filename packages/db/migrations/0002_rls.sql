@@ -37,10 +37,12 @@ as $$
 $$;
 
 -- ------------------------------------------------------------
--- organizations: dono lê/edita; demais membros leem
+-- organizations: usuário autenticado cria (signup); dono lê/edita
 -- ------------------------------------------------------------
 create policy "orgs_select_member" on organizations
     for select using (id = public.current_org_id());
+create policy "orgs_insert_auth" on organizations
+    for insert with check (auth.uid() is not null);
 create policy "orgs_update_owner" on organizations
     for update using (public.is_owner());
 

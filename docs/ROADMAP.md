@@ -8,11 +8,12 @@
 - [x] Worker: conector AliExpress (API oficial), score, copy, Telegram,
       adapters simulados
 - [x] Testes do worker (20 testes stdlib)
-- [ ] Telas: dashboard, nova campanha (colar URL), aprovação de copy,
+- [x] Telas: dashboard, nova campanha (colar URL), aprovação de copy,
       publicações, cliques
-- [ ] Vitrine pública `/c/<slug>` + redirect `/r/<id>`
-- [ ] Card via Pictify
-- [ ] Testes E2E
+- [x] Vitrine pública `/c/<slug>` + redirect `/r/<id>`
+- [x] Card via `next/og` (`/og/card/<id>`, RLS anon para vitrine)
+- [x] Testes E2E (Playwright: auth, nova campanha, vitrine/card/redirect
+      públicos — `apps/web/e2e/`)
 - [ ] Deploy: Vercel (web) + worker (VPS/RAILWAY)
 
 ## Fase 2 — Canais e conectores

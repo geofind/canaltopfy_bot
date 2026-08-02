@@ -11,7 +11,7 @@ oportunidade → validação → ficha do produto → landing + copy → sugest�
 
 **Fase 1 — MVP (fluxo vertical).** Colar URL de produto (AliExpress) →
 extração via API oficial → link de afiliado verificado → Topfy Score →
-3 cópias (Ollama + fallback) → card (Pictify) → página pública →
+3 cópias (OpenRouter + fallback) → card (next/og) → página pública →
 publicação (Telegram real + WhatsApp assistido) → clique rastreado → analytics.
 
 ## Monorepo
@@ -28,8 +28,9 @@ docs         Decisões, arquitetura, roadmap, segurança
 ### 1. Banco (Supabase cloud)
 
 1. Crie um projeto em https://supabase.com (plano free).
-2. Rode as migrations de `packages/db/migrations/` no SQL Editor
-   (`0001_schema.sql`, depois `0002_rls.sql`).
+2. Rode as migrations de `packages/db/migrations/` no SQL Editor, em ordem
+   (`0001_schema.sql` até `0005_provider_openrouter.sql`) — ou o script
+   consolidado `packages/db/reset-e-migrate.sql` de uma vez só.
 3. Copie `.env.example` para `.env` e preencha `SUPABASE_URL`,
    `SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY`.
 
@@ -51,15 +52,28 @@ pip install -r requirements.txt
 python -m main                # consome a fila de jobs
 ```
 
-### 4. IA local (opcional)
+### 4. IA (opcional)
 
-Instale [Ollama](https://ollama.com) e puxe o modelo:
+Crie uma key grátis em [openrouter.ai/keys](https://openrouter.ai/keys) e
+preencha `OPENROUTER_API_KEY` no `.env` (confirme o slug de modelo grátis
+vigente em `openrouter.ai/models` antes de trocar `OPENROUTER_MODEL`).
+
+Sem `OPENROUTER_API_KEY`, o worker gera copy determinística (nunca inventa
+fato) — nunca quebra por falta de credencial.
+
+### 5. Testes E2E (Playwright)
+
+Cobrem login/erro de credencial, guarda de rota autenticada, criação de
+campanha (feliz e validação de URL), e as rotas públicas sem sessão
+(`/c/<slug>`, `/og/card/<id>`, `/r/<id>`). Usam o Supabase configurado no
+`.env` — o `global-setup` provisiona um usuário/organização de teste fixos
+via Admin API (idempotente, não passa pelo formulário de signup).
 
 ```bash
-ollama pull llama3.2
+cd apps/web
+npm run dev            # em outro terminal — ou deixa o Playwright subir sozinho
+npm run test:e2e
 ```
-
-Sem Ollama, o worker gera copy determinística (nunca inventa fato).
 
 ## Regras de segurança
 

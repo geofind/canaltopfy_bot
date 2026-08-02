@@ -76,6 +76,38 @@ def testar_bot() -> dict[str, Any]:
     return resposta["result"]
 
 
+def descobrir_chats(offset: int = -1) -> list[dict[str, Any]]:
+    """getUpdates — lista os chats únicos em que o bot está presente.
+
+    Para grupos privados com link de convite (t.me/+...): adicione o bot
+    ao grupo e envie UMA mensagem qualquer no grupo (ou adicione um membro);
+    o evento aparece aqui com o chat.id numérico (negativo)."""
+    resposta = _chamar_api("getUpdates", {
+        "offset": offset, "timeout": 1, "allowed_updates": ["message",
+                                                            "channel_post",
+                                                            "my_chat_member",
+                                                            "chat_member"]})
+    if not resposta.get("ok"):
+        raise RuntimeError(
+            f"telegram getUpdates respondeu ok=false: {resposta.get('description')} "
+            "(webhook ativo impede getUpdates — remova o webhook primeiro)")
+    chats: dict[int, dict[str, Any]] = {}
+    for update in resposta.get("result", []):
+        for chave in ("message", "channel_post", "edited_message",
+                      "my_chat_member", "chat_member"):
+            evento = update.get(chave)
+            if not isinstance(evento, dict):
+                continue
+            chat = evento.get("chat")
+            if isinstance(chat, dict) and chat.get("id") is not None:
+                chats[chat["id"]] = {
+                    "id": chat["id"],
+                    "type": chat.get("type"),
+                    "title": chat.get("title") or chat.get("username") or "",
+                }
+    return list(chats.values())
+
+
 def _escapar_html(texto: str) -> str:
     return (texto.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
@@ -121,3 +153,41 @@ def publicar_oferta_telegram(
         raise RuntimeError(f"telegram recusou a publicação: {motivo}")
 
     return {"external_message_id": str(resposta["result"]["message_id"])}
+
+
+if __name__ == "__main__":
+    """CLI de diagnóstico: python -m publishers.telegram [find-chat|bot]
+
+    find-chat: lista os chats em que o bot está (grupo privado aparece
+    depois que o bot entra nele e alguém manda mensagem).
+    bot: confirma o token (getMe)."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+    env_path = Path(__file__).resolve().parents[3] / ".env"
+    if env_path.is_file():
+        for linha in env_path.read_text(encoding="utf-8").splitlines():
+            linha = linha.strip()
+            if not linha or linha.startswith("#") or "=" not in linha:
+                continue
+            chave, valor = linha.split("=", 1)
+            os.environ.setdefault(chave.strip(), valor.strip())
+
+    comando = sys.argv[1] if len(sys.argv) > 1 else "find-chat"
+
+    if comando == "bot":
+        bot = testar_bot()
+        print(f"bot: @{bot.get('username')} ({bot.get('first_name')}) — token OK")
+    elif comando == "find-chat":
+        chats = descobrir_chats()
+        if not chats:
+            print("Nenhum chat encontrado. Adicione o bot ao grupo e envie "
+                  "uma mensagem nele (ou adicione um membro), depois rode "
+                  "de novo.")
+        for chat in chats:
+            print(f"{chat['id']}  [{chat['type']}]  {chat['title']}")
+    else:
+        print(f"comando desconhecido: {comando}")
+        sys.exit(1)

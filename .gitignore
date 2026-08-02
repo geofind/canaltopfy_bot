@@ -19,6 +19,7 @@ __pycache__/
 db/*.db
 db/*.db-wal
 db/*.db-shm
+localdev/
 
 # Sistema operacional / editor
 .DS_Store
