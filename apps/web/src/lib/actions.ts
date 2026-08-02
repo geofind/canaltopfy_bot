@@ -9,16 +9,25 @@ import { createClient } from "@/lib/supabase/server";
 
 const URL_PRODUTO = z.string().url().refine(
   (url) => url.includes("aliexpress.") ||
-    url.includes("mercadolivre.") || url.includes("mercadolibre."),
+    url.includes("mercadolivre.") || url.includes("mercadolibre.") ||
+    url.includes("meli.la") ||
+    url.includes("amazon.") || url.includes("amzn."),
   {
     message:
-      "Por enquanto aceitamos URLs da AliExpress ou do Mercado Livre.",
+      "Por enquanto aceitamos URLs da AliExpress, Mercado Livre (inclusive links curtos meli.la) ou Amazon (amzn.to também).",
   },
 );
 
 function sourceNameFromUrl(url: string): string {
   if (url.includes("aliexpress.")) {
     return "aliexpress";
+  }
+  if (url.includes("mercadolivre.") || url.includes("mercadolibre.") ||
+      url.includes("meli.la")) {
+    return "mercadolivre";
+  }
+  if (url.includes("amazon.") || url.includes("amzn.")) {
+    return "amazon";
   }
   return "mercadolivre";
 }
@@ -240,7 +249,12 @@ export async function createCampaignFromUrl(
   const { error: jobError } = await supabase.from("jobs").insert({
     organization_id: profile.organization_id,
     type: "product.import",
-    payload: { source_name: sourceName, url },
+    payload: {
+      source_name: sourceName,
+      url,
+      product_id: product.id,
+      campaign_id: campaignId,
+    },
   });
 
   if (jobError) {
@@ -289,7 +303,9 @@ export async function approveCampaignContent(
     return { error: "Conteúdo aprovado, mas falha ao atualizar a campanha." };
   }
 
+  const orgId = await getOrgId(supabase);
   await supabase.from("audit_log").insert({
+    organization_id: orgId,
     actor_type: "user",
     action: "campanha_aprovada",
     entity_type: "campaign",
@@ -366,4 +382,342 @@ export async function schedulePublication(
 
   revalidatePath(`/campanhas/${campaignId}`);
   return { ok: true };
+}
+
+async function getOrgId(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+): Promise<string | null> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return null;
+  }
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("organization_id")
+    .eq("id", user.id)
+    .single();
+  return profile?.organization_id ?? null;
+}
+
+export async function saveChannelGroup(
+  _prev: CampaignActionState,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) {
+    return { error: "Sessão expirada — entre novamente." };
+  }
+
+  const name = String(formData.get("name") ?? "").trim();
+  const telegramChatId = String(formData.get("telegram_chat_id") ?? "").trim();
+  if (!name || !telegramChatId) {
+    return { error: "Informe nome e chat_id do grupo." };
+  }
+
+  const { data: grupo, error } = await supabase
+    .from("channel_groups")
+    .insert({ organization_id: organizationId, name, telegram_chat_id: telegramChatId })
+    .select("id")
+    .single();
+
+  if (error || !grupo) {
+    return { error: "Não foi possível salvar o grupo. Verifique o chat_id (evite duplicar)." };
+  }
+
+  revalidatePath("/grupos");
+  return { ok: true };
+}
+
+export async function deleteChannelGroup(groupId: string) {
+  const supabase = await createClient();
+  await supabase.from("channel_groups").delete().eq("id", groupId);
+  revalidatePath("/grupos");
+}
+
+export async function sendGroupMessage(
+  groupId: string,
+  _prev: CampaignActionState,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) {
+    return { error: "Sessão expirada — entre novamente." };
+  }
+  const text = String(formData.get("text") ?? "").trim();
+  if (!text) {
+    return { error: "Escreva a mensagem antes de enviar." };
+  }
+
+  const { error: jobError } = await supabase.from("jobs").insert({
+    organization_id: organizationId,
+    type: "telegram.send",
+    payload: { group_id: groupId, text },
+  });
+
+  if (jobError) {
+    return { error: "Falha ao enfileirar o envio." };
+  }
+  return { ok: true };
+}
+
+export async function createQueue(
+  _prev: CampaignActionState,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) {
+    return { error: "Sessão expirada — entre novamente." };
+  }
+
+  const name = String(formData.get("name") ?? "").trim();
+  const intervalMinutes = Number(formData.get("interval_minutes") ?? 5);
+  const windowStart = String(formData.get("window_start") ?? "").trim() || null;
+  const windowEnd = String(formData.get("window_end") ?? "").trim() || null;
+  const groupIds = formData.getAll("group_ids").map(String);
+
+  if (!name) {
+    return { error: "Dê um nome para a fila." };
+  }
+  if (groupIds.length === 0) {
+    return { error: "Selecione pelo menos um grupo de destino." };
+  }
+  if (!Number.isFinite(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 240) {
+    return { error: "Intervalo deve estar entre 1 e 240 minutos." };
+  }
+
+  const { data: fila, error } = await supabase
+    .from("queues")
+    .insert({
+      organization_id: organizationId,
+      name,
+      interval_minutes: intervalMinutes,
+      window_start: windowStart,
+      window_end: windowEnd,
+    })
+    .select("id")
+    .single();
+
+  if (error || !fila) {
+    return { error: "Não foi possível criar a fila." };
+  }
+
+  const linhas = groupIds.map((group_id) => ({
+    queue_id: fila.id,
+    group_id,
+  }));
+  const { error: gruposError } = await supabase.from("queue_groups").insert(linhas);
+  if (gruposError) {
+    return { error: "Fila criada, mas falha ao vincular os grupos." };
+  }
+
+  revalidatePath("/filas");
+  return { ok: true };
+}
+
+export async function toggleQueue(queueId: string, isActive: boolean) {
+  const supabase = await createClient();
+  await supabase.from("queues").update({ is_active: isActive }).eq("id", queueId);
+  revalidatePath("/filas");
+}
+
+export async function deleteQueue(queueId: string) {
+  const supabase = await createClient();
+  await supabase.from("queues").delete().eq("id", queueId);
+  revalidatePath("/filas");
+}
+
+export async function addToQueue(
+  campaignId: string,
+  contentId: string,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) {
+    return { error: "Sessão expirada — entre novamente." };
+  }
+
+  const queueId = String(formData.get("queue_id") ?? "").trim();
+  const whenRaw = String(formData.get("when") ?? "").trim();
+  if (!queueId) {
+    return { error: "Selecione a fila." };
+  }
+
+  const scheduledAt = whenRaw
+    ? new Date(whenRaw).toISOString()
+    : new Date().toISOString();
+
+  const { error } = await supabase.from("queue_items").insert({
+    organization_id: organizationId,
+    queue_id: queueId,
+    campaign_id: campaignId,
+    content_id: contentId,
+    scheduled_at: scheduledAt,
+  });
+
+  if (error) {
+    return { error: "Não foi possível adicionar à fila." };
+  }
+
+  await supabase.from("campaigns").update({ status: "SCHEDULED" }).eq("id", campaignId);
+  revalidatePath(`/campanhas/${campaignId}`);
+  revalidatePath("/filas");
+  return { ok: true };
+}
+
+export async function publishNow(
+  campaignId: string,
+  contentId: string,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) {
+    return { error: "Sessão expirada — entre novamente." };
+  }
+
+  const groupId = String(formData.get("group_id") ?? "").trim();
+  const chatId = String(formData.get("chat_id") ?? "").trim();
+  if (!groupId && !chatId) {
+    return { error: "Escolha o grupo de destino." };
+  }
+
+  let chatDestino: string | null = null;
+  if (groupId) {
+    const { data: grupo } = await supabase
+      .from("channel_groups")
+      .select("telegram_chat_id")
+      .eq("id", groupId)
+      .maybeSingle();
+    chatDestino = grupo?.telegram_chat_id ?? null;
+  } else {
+    chatDestino = chatId;
+  }
+  if (!chatDestino) {
+    return { error: "Grupo não encontrado." };
+  }
+
+  const whenRaw = String(formData.get("when") ?? "").trim();
+  const scheduledFor = whenRaw
+    ? new Date(whenRaw).toISOString()
+    : new Date().toISOString();
+
+  const { data: publication, error: pubError } = await supabase
+    .from("publications")
+    .insert({
+      campaign_id: campaignId,
+      content_id: contentId,
+      channel: "telegram",
+      mode: "production",
+      status: "SCHEDULED",
+      scheduled_at: scheduledFor,
+      chat_id: chatDestino,
+    })
+    .select("id")
+    .single();
+
+  if (pubError || !publication) {
+    return { error: "Não foi possível criar a publicação." };
+  }
+
+  const payload: Record<string, string> = {
+    campaign_id: campaignId,
+    content_id: contentId,
+  };
+  if (groupId) {
+    payload.group_id = groupId;
+  } else {
+    payload.chat_id = chatDestino;
+  }
+
+  const { error: jobError } = await supabase.from("jobs").insert({
+    organization_id: organizationId,
+    type: "publication.telegram",
+    payload,
+    scheduled_for: scheduledFor,
+  });
+
+  if (jobError) {
+    return { error: "Publicação criada, mas falha ao enfileirar o worker." };
+  }
+
+  await supabase.from("campaigns").update({ status: "SCHEDULED" }).eq("id", campaignId);
+  revalidatePath(`/campanhas/${campaignId}`);
+  return { ok: true };
+}
+
+export async function regenerateContents(
+  campaignId: string,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) {
+    return { error: "Sessão expirada — entre novamente." };
+  }
+  const { error } = await supabase.from("jobs").insert({
+    organization_id: organizationId,
+    type: "content.regenerate",
+    payload: { campaign_id: campaignId },
+  });
+  if (error) {
+    return { error: "Falha ao enfileirar a geração de textos." };
+  }
+  revalidatePath(`/campanhas/${campaignId}`);
+  return { ok: true };
+}
+
+export async function updateCardConfig(
+  productId: string,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const theme = String(formData.get("theme") ?? "navy");
+  const border = String(formData.get("border") ?? "off") === "on";
+
+  const { error } = await supabase
+    .from("products")
+    .update({ card_config: { theme, border } })
+    .eq("id", productId);
+
+  if (error) {
+    return { error: "Não foi possível salvar o card." };
+  }
+  return { ok: true };
+}
+
+export async function saveCtaPhrase(
+  _prev: CampaignActionState,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) {
+    return { error: "Sessão expirada — entre novamente." };
+  }
+
+  const phrase = String(formData.get("phrase") ?? "").trim();
+  if (!phrase) {
+    return { error: "Escreva a frase do gatilho." };
+  }
+
+  const { error } = await supabase
+    .from("cta_phrases")
+    .insert({ organization_id: organizationId, phrase });
+
+  if (error) {
+    return { error: "Não foi possível salvar a frase." };
+  }
+  revalidatePath("/gatilhos");
+  return { ok: true };
+}
+
+export async function deleteCtaPhrase(phraseId: string) {
+  const supabase = await createClient();
+  await supabase.from("cta_phrases").delete().eq("id", phraseId);
+  revalidatePath("/gatilhos");
 }

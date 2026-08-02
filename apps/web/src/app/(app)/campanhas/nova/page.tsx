@@ -8,7 +8,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-export default function NewCampaignPage() {
+export default async function NewCampaignPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ url?: string }>;
+}) {
+  const { url } = await searchParams;
   return (
     <div className="mx-auto max-w-lg space-y-6">
       <div className="space-y-1">
@@ -33,7 +38,7 @@ export default function NewCampaignPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <NewCampaignForm />
+          <NewCampaignForm initialUrl={url ?? ""} />
         </CardContent>
       </Card>
     </div>

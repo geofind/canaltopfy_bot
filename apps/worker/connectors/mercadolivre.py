@@ -29,6 +29,47 @@ API_BASE = "https://api.mercadolibre.com"
 # 3.14 (3.14.6) tem regressão que quebra literal + classe + classe
 # (ex: ML[A-Z][A-Z] não casa "MLB"). Alternância explícita funciona.
 ITEM_ID_RE = re.compile(r"\bML(?:B|A|C|M|U|T|V|P|EC|CO)-?(\d{7,15})\b")
+# meli.la: encurtador oficial do ML (link de "compartilhar" do app) — o ID
+# do anúncio só aparece na URL final, depois do redirect.
+SHORTLINK_HOSTS = ("meli.la",)
+REDIRECT_MAX = 5
+REDIRECT_TIMEOUT = 12
+
+
+class _RedirectCapturado(Exception):
+    def __init__(self, url: str) -> None:
+        super().__init__(url)
+        self.url = url
+
+
+class _NoAutoRedirect(urllib.request.HTTPRedirectHandler):
+    """Captura o Location do redirect sem seguir automaticamente — o
+    chamador decide a próxima URL (loop com limite)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl) -> Any:
+        raise _RedirectCapturado(newurl)
+
+
+def _resolve_shortlink(url: str) -> Optional[str]:
+    """Segue o redirect do meli.la só pelos cabeçalhos Location (nunca
+    baixa o body). Best-effort: falha -> None (cai no erro de ID não
+    encontrado, que já orienta o usuário a colar o link do anúncio)."""
+    atual = url
+    for _ in range(REDIRECT_MAX):
+        try:
+            opener = urllib.request.build_opener(_NoAutoRedirect())
+            req = urllib.request.Request(
+                atual, headers={"User-Agent": "TopfyAffiliateOS/0.1",
+                                "Accept": "text/html,*/*"})
+            with opener.open(req, timeout=REDIRECT_TIMEOUT) as resp:
+                return resp.geturl()
+        except _RedirectCapturado as r:
+            atual = r.url
+            continue
+        except (urllib.error.URLError, urllib.error.HTTPError,
+                OSError, ValueError):
+            return None
+    return None
 
 
 def _get_json(url: str, timeout: int = 10) -> Any:
@@ -115,7 +156,8 @@ class MercadoLivreConnector(MarketplaceConnector):
 
     def detect_url(self, url: str) -> bool:
         host = urllib.parse.urlparse(url).netloc.lower()
-        return "mercadolivre." in host or "mercadolibre." in host
+        return ("mercadolivre." in host or "mercadolibre." in host
+                or host in SHORTLINK_HOSTS)
 
     def normalize_url(self, url: str) -> str:
         parsed = urllib.parse.urlparse(url)
@@ -128,6 +170,13 @@ class MercadoLivreConnector(MarketplaceConnector):
     def get_product(self, url: str) -> dict[str, Any]:
         if not self.detect_url(url):
             raise ValueError(f"URL não é do Mercado Livre: {url}")
+
+        host = urllib.parse.urlparse(url).netloc.lower()
+        if host in SHORTLINK_HOSTS:
+            resolvida = _resolve_shortlink(url)
+            if resolvida:
+                url = resolvida
+
         canonical = self.normalize_url(url)
         external_id = self._external_id(url)
 
@@ -135,7 +184,10 @@ class MercadoLivreConnector(MarketplaceConnector):
             raise ValueError(
                 "Não foi possível extrair o ID do anúncio da URL — "
                 "esperado padrão MLB-<numero> (ex: "
-                "produto.mercadolivre.com.br/MLB-2837492291-...)")
+                "produto.mercadolivre.com.br/MLB-2837492291-...). Se o "
+                "link curto (meli.la) aponta para um perfil, loja ou "
+                "busca em vez de um anúncio específico, cole o link do "
+                "produto.")
 
         try:
             bruto = _get_json(f"{API_BASE}/items/{external_id}")

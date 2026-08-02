@@ -63,11 +63,17 @@ def get_publication(publication_id: str) -> Optional[dict[str, Any]]:
     return resp.data
 
 
-def has_active_publication(campaign_id: str, channel: str) -> bool:
-    """Deduplicação: existe publicação não-falha da campanha neste canal?"""
-    resp = (_get().table("publications")
-            .select("id").eq("campaign_id", campaign_id).eq("channel", channel)
-            .neq("status", "FAILED").neq("status", "CANCELLED").execute())
+def has_active_publication(campaign_id: str, channel: str,
+                           chat_id: Optional[str] = None) -> bool:
+    """Deduplicação: existe publicação não-falha da campanha neste canal?
+    Com `chat_id`, a dedup é por canal E grupo — permite publicar a mesma
+    campanha em vários grupos, mas nunca duas vezes no mesmo."""
+    query = (_get().table("publications")
+             .select("id").eq("campaign_id", campaign_id).eq("channel", channel)
+             .neq("status", "FAILED").neq("status", "CANCELLED"))
+    if chat_id:
+        query = query.eq("chat_id", chat_id)
+    resp = query.execute()
     return bool(resp.data)
 
 
@@ -102,6 +108,60 @@ def finish_job(job_id: int, *, ok: bool, error: Optional[str] = None) -> None:
     if error:
         fields["error"] = error
     _get().table("jobs").update(fields).eq("id", job_id).execute()
+
+
+def get_channel_group(group_id: str) -> Optional[dict[str, Any]]:
+    resp = (_get().table("channel_groups").select("*")
+            .eq("id", group_id).maybe_single().execute())
+    return resp.data
+
+
+def list_channel_groups(organization_id: str) -> list[dict[str, Any]]:
+    resp = (_get().table("channel_groups").select("*")
+            .eq("organization_id", organization_id).order("name").execute())
+    return resp.data or []
+
+
+def get_cta_phrases(organization_id: str) -> list[dict[str, Any]]:
+    resp = (_get().table("cta_phrases").select("phrase")
+            .eq("organization_id", organization_id)
+            .eq("is_active", True).order("created_at").execute())
+    return resp.data or []
+
+
+def get_active_queues() -> list[dict[str, Any]]:
+    resp = (_get().table("queues").select("*")
+            .eq("is_active", True).order("created_at").execute())
+    return resp.data or []
+
+
+def get_queue_groups(queue_id: str) -> list[dict[str, Any]]:
+    resp = (_get().table("queue_groups").select("group_id")
+            .eq("queue_id", queue_id).execute())
+    return resp.data or []
+
+
+def get_last_dispatched_at(queue_id: str) -> Optional[str]:
+    resp = (_get().table("queue_items")
+            .select("dispatched_at").eq("queue_id", queue_id)
+            .neq("dispatched_at", None)
+            .order("dispatched_at", desc=True).limit(1).execute())
+    if not resp.data:
+        return None
+    return resp.data[0].get("dispatched_at")
+
+
+def get_pending_queue_items(queue_id: str, now_iso: str,
+                            limit: int = 10) -> list[dict[str, Any]]:
+    resp = (_get().table("queue_items").select("*")
+            .eq("queue_id", queue_id).eq("status", "PENDING")
+            .lte("scheduled_at", now_iso)
+            .order("scheduled_at").limit(limit).execute())
+    return resp.data or []
+
+
+def mark_queue_item(item_id: str, fields: dict[str, Any]) -> None:
+    _get().table("queue_items").update(fields).eq("id", item_id).execute()
 
 
 def register_audit(organization_id: Optional[str], *, actor_type: str,

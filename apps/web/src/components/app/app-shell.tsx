@@ -12,6 +12,10 @@ const NAV_LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/campanhas", label: "Campanhas" },
   { href: "/campanhas/nova", label: "Nova campanha" },
+  { href: "/sugestoes", label: "Sugestões do dia" },
+  { href: "/grupos", label: "Grupos" },
+  { href: "/filas", label: "Filas" },
+  { href: "/gatilhos", label: "Gatilhos" },
   { href: "/sistema", label: "Sistema" },
   { href: "/integracoes", label: "Integrações" },
 ];

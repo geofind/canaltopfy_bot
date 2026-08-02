@@ -24,6 +24,23 @@
 
 ## Fase 2 — Canais e conectores
 
+### Vitrine autoral CanalTopfy — referência Amazon Creators
+
+- [x] Estudar a orientação oficial sobre descoberta de ofertas, criação de
+      links com ID de Associado e páginas de Mais Vendidos da Amazon Brasil
+- [x] Transformar `/ofertas` na página principal de curadoria do CanalTopfy,
+      usando logo, paleta e dados reais já disponíveis no Affiliate OS
+- [x] Organizar produtos publicados por categoria, destacar a entrada mais
+      recente e manter avisos claros sobre afiliados, preço e disponibilidade
+- [x] Documentar o roteiro de revisão da página para uso com Claude no Chrome
+- [ ] Cadastrar categorias consistentes nos produtos publicados para evitar o
+      agrupamento genérico “Achadinhos”
+- [ ] Criar IDs de rastreamento Amazon distintos por canal/campanha e importar
+      os resultados do relatório oficial sem tratar o parâmetro do link como
+      prova de comissão
+- [ ] Após elegibilidade, avaliar a Creators API para atualização autorizada de
+      catálogo; até lá, manter a entrada Amazon manual e supervisionada
+
 - WhatsApp Business Cloud API (opt-in, templates, janela 24h)
 - Amazon Creators API (após elegibilidade — 10 vendas qualificadas/30 dias)
 - TikTok Content Posting API (após auditoria)

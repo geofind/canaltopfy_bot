@@ -14,6 +14,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+import uuid
 from typing import Any, Callable, Optional
 
 from connectors import CredencialNaoConfigurada
@@ -26,22 +27,17 @@ def _token() -> Optional[str]:
     return os.environ.get("TELEGRAM_BOT_TOKEN")
 
 
-def _chamar_api(metodo: str, payload: dict[str, Any], *,
-                sleep_fn: Callable[[float], None] = time.sleep) -> dict[str, Any]:
-    token = _token()
-    if not token:
-        raise CredencialNaoConfigurada(
-            "telegram: TELEGRAM_BOT_TOKEN não configurado — crie um bot no "
-            "@BotFather e defina a variável de ambiente.")
-    url = f"{TELEGRAM_API_BASE}/bot{token}/{metodo}"
-    body = json.dumps(payload).encode("utf-8")
+def _executar_com_retry(
+    montar_request: Callable[[], urllib.request.Request],
+    metodo: str,
+    *,
+    timeout: int = 15,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
     ultimo_erro: Optional[Exception] = None
     for tentativa in range(1, MAX_TENTATIVAS + 1):
-        req = urllib.request.Request(
-            url, data=body, method="POST",
-            headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(montar_request(), timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             corpo = exc.read().decode("utf-8", errors="replace")
@@ -66,6 +62,69 @@ def _chamar_api(metodo: str, payload: dict[str, Any], *,
                 continue
             raise ultimo_erro
     raise ultimo_erro or RuntimeError(f"telegram {metodo}: falha desconhecida")
+
+
+def _chamar_api(metodo: str, payload: dict[str, Any], *,
+                sleep_fn: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+    token = _token()
+    if not token:
+        raise CredencialNaoConfigurada(
+            "telegram: TELEGRAM_BOT_TOKEN não configurado — crie um bot no "
+            "@BotFather e defina a variável de ambiente.")
+    url = f"{TELEGRAM_API_BASE}/bot{token}/{metodo}"
+    body = json.dumps(payload).encode("utf-8")
+    return _executar_com_retry(
+        lambda: urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type": "application/json"}),
+        metodo, sleep_fn=sleep_fn)
+
+
+def _baixar_imagem(url: str, *, timeout: int = 20) -> Optional[bytes]:
+    """Baixa a imagem do card pra enviar como upload direto — o fetcher de
+    URL do Telegram (sendPhoto com `photo` = URL) exige Content-Length, que
+    rotas dinâmicas na Vercel não declaram (Transfer-Encoding: chunked), e
+    rejeita com 'wrong type of the web page content'. None = segue sem
+    foto (sendMessage), nunca derruba a publicação por isso."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.read()
+    except (urllib.error.URLError, urllib.error.HTTPError):
+        return None
+
+
+def _chamar_api_multipart(
+    metodo: str,
+    campos: dict[str, str],
+    foto_bytes: bytes,
+    *,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    token = _token()
+    if not token:
+        raise CredencialNaoConfigurada(
+            "telegram: TELEGRAM_BOT_TOKEN não configurado — crie um bot no "
+            "@BotFather e defina a variável de ambiente.")
+    url = f"{TELEGRAM_API_BASE}/bot{token}/{metodo}"
+    boundary = uuid.uuid4().hex
+
+    def montar() -> urllib.request.Request:
+        partes: list[bytes] = []
+        for chave, valor in campos.items():
+            partes.append(
+                f"--{boundary}\r\nContent-Disposition: form-data; "
+                f'name="{chave}"\r\n\r\n{valor}\r\n'.encode())
+        partes.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; '
+            f'filename="card.png"\r\nContent-Type: image/png\r\n\r\n'.encode())
+        partes.append(foto_bytes)
+        partes.append(f"\r\n--{boundary}--\r\n".encode())
+        body = b"".join(partes)
+        return urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+
+    return _executar_com_retry(montar, metodo, timeout=30, sleep_fn=sleep_fn)
 
 
 def testar_bot() -> dict[str, Any]:
@@ -139,10 +198,13 @@ def publicar_oferta_telegram(
 
     mensagem = _montar_mensagem(copy, redirect_url)
 
-    if image_url:
-        resposta = _chamar_api("sendPhoto", {
-            "chat_id": chat_id, "photo": image_url, "caption": mensagem,
-            "parse_mode": "HTML"}, sleep_fn=sleep_fn)
+    foto_bytes = _baixar_imagem(image_url) if image_url else None
+
+    if foto_bytes:
+        resposta = _chamar_api_multipart(
+            "sendPhoto",
+            {"chat_id": chat_id, "caption": mensagem, "parse_mode": "HTML"},
+            foto_bytes, sleep_fn=sleep_fn)
     else:
         resposta = _chamar_api("sendMessage", {
             "chat_id": chat_id, "text": mensagem, "parse_mode": "HTML",
@@ -152,6 +214,28 @@ def publicar_oferta_telegram(
         motivo = resposta.get("description") or "resposta sem 'ok'"
         raise RuntimeError(f"telegram recusou a publicação: {motivo}")
 
+    return {"external_message_id": str(resposta["result"]["message_id"])}
+
+
+def enviar_mensagem_telegram(
+    *,
+    chat_id: str,
+    text: str,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """Envia uma mensagem de texto livre (HTML) para um chat — usado no
+    modo send/mensagens de teste. Não cria publication; chamada via job
+    `telegram.send`."""
+    if not chat_id:
+        raise ValueError("enviar mensagem exige 'chat_id'")
+    if not text or not text.strip():
+        raise ValueError("mensagem vazia — informe um texto")
+    resposta = _chamar_api("sendMessage", {
+        "chat_id": chat_id, "text": text, "parse_mode": "HTML",
+        "disable_web_page_preview": False}, sleep_fn=sleep_fn)
+    if not resposta.get("ok"):
+        motivo = resposta.get("description") or "resposta sem 'ok'"
+        raise RuntimeError(f"telegram recusou a mensagem: {motivo}")
     return {"external_message_id": str(resposta["result"]["message_id"])}
 
 

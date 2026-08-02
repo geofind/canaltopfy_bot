@@ -200,6 +200,8 @@ class MercadoLivreConnectorTests(unittest.TestCase):
         self.assertTrue(
             self.conector.detect_url(
                 "https://www.mercadolibre.com.ar/MLA-1234567890-foo"))
+        self.assertTrue(
+            self.conector.detect_url("https://meli.la/2qHBFJR"))
         self.assertFalse(
             self.conector.detect_url(
                 "https://www.amazon.com.br/dp/B0XYZ"))
@@ -275,6 +277,45 @@ class MercadoLivreConnectorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.conector.get_product(
                 "https://www.mercadolivre.com.br/sec/2x2x?quantity=1")
+
+    def test_shortlink_resolve_para_produto(self):
+        """meli.la resolvido para um anúncio -> extrai o ID normalmente."""
+        def fake_get_json(url, timeout=10):
+            if "/items/" in url:
+                return dict(self.ITEM_FIXTURE)
+            if "/categories/" in url:
+                return {"path_from_root": [{"name": "Tecnologia"}]}
+            raise AssertionError(f"URL inesperada: {url}")
+
+        with mock.patch("connectors.mercadolivre._resolve_shortlink",
+                        return_value=self.URL_BR), \
+             mock.patch("connectors.mercadolivre._get_json",
+                        side_effect=fake_get_json):
+            produto = self.conector.get_product("https://meli.la/2qHBFJR")
+
+        self.assertEqual(produto["external_product_id"], "MLB2837492291")
+        self.assertEqual(produto["source_confidence"], "VERIFIED")
+
+    def test_shortlink_resolve_para_perfil_levanta_erro_claro(self):
+        """meli.la que aponta para um perfil/loja (sem ID de anúncio) tem
+        que falhar com mensagem clara, não com um ID errado."""
+        perfil_url = (
+            "https://www.mercadolivre.com.br/social/cadu_21"
+            "?matt_word=canaltopfy&matt_tool=11105536")
+        with mock.patch("connectors.mercadolivre._resolve_shortlink",
+                        return_value=perfil_url):
+            with self.assertRaises(ValueError) as ctx:
+                self.conector.get_product("https://meli.la/2qHBFJR")
+        self.assertIn("perfil", str(ctx.exception))
+
+    def test_shortlink_falha_resolucao_cai_no_erro_padrao(self):
+        """Se o redirect não puder ser seguido (rede indisponível), o
+        conector não quebra — cai no erro de 'ID não encontrado' de
+        sempre, usando a própria URL curta."""
+        with mock.patch("connectors.mercadolivre._resolve_shortlink",
+                        return_value=None):
+            with self.assertRaises(ValueError):
+                self.conector.get_product("https://meli.la/2qHBFJR")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,9 @@ import { createClient } from "@/lib/supabase/server";
 import {
   ApproveContentButton,
   SchedulePublicationForm,
+  RegenerateButton,
+  CardConfigForm,
+  CopyTextButton,
 } from "@/components/app/campaign-actions";
 import {
   Card,
@@ -72,7 +75,7 @@ export default async function CampaignDetailPage({
   }
 
   const [{ data: contents }, { data: publications }, { data: clicks },
-    { data: conversions }] = await Promise.all([
+    { data: conversions }, { data: grupos }, { data: filas }] = await Promise.all([
     supabase
       .from("contents")
       .select("*")
@@ -95,6 +98,8 @@ export default async function CampaignDetailPage({
       .eq("campaign_id", id)
       .order("occurred_at", { ascending: false })
       .limit(20),
+    supabase.from("channel_groups").select("id, name, telegram_chat_id").order("name"),
+    supabase.from("queues").select("id, name").order("name"),
   ]);
 
   const totalCliques = clicks?.length ?? 0;
@@ -110,6 +115,9 @@ export default async function CampaignDetailPage({
     campanha.status === "REVIEW_REQUIRED" || campanha.status === "READY";
   const canPublish = campanha.status === "APPROVED" ||
     campanha.status === "SCHEDULED" || campanha.status === "PUBLISHED";
+
+  const publicacaoAtiva = publications?.find((p) => p.status === "PUBLISHED");
+  const ctaLink = publicacaoAtiva ? `/r/${publicacaoAtiva.id}` : null;
 
   const breakdown = (produto?.score_breakdown ?? {}) as Record<string, number>;
 
@@ -256,7 +264,10 @@ export default async function CampaignDetailPage({
       </div>
 
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Cópias geradas</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Cópias geradas</h2>
+          <RegenerateButton campaignId={campanha.id} />
+        </div>
         {!contents || contents.length === 0 ? (
           <Card>
             <CardContent className="py-12 text-center text-sm text-muted-foreground">
@@ -293,6 +304,9 @@ export default async function CampaignDetailPage({
                   <p className="whitespace-pre-wrap text-sm leading-relaxed">
                     {c.copy_text}
                   </p>
+                  {c.status === "APPROVED" && (
+                    <CopyTextButton copyText={c.copy_text} link={ctaLink} />
+                  )}
                   {c.status !== "APPROVED" && c.status !== "REJECTED" && (
                     <ApproveContentButton
                       campaignId={campanha.id}
@@ -413,6 +427,7 @@ export default async function CampaignDetailPage({
               <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3 font-medium">Canal</th>
+                  <th className="px-4 py-3 font-medium">Grupo</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium">Quando</th>
                   <th className="px-4 py-3 font-medium">Link externo</th>
@@ -422,6 +437,9 @@ export default async function CampaignDetailPage({
                 {publications.map((p) => (
                   <tr key={p.id} className="hover:bg-muted/50">
                     <td className="px-4 py-3">{p.channel}</td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {p.chat_id ?? "—"}
+                    </td>
                     <td className="px-4 py-3">
                       <Badge variant="secondary">{p.status}</Badge>
                     </td>
@@ -447,6 +465,12 @@ export default async function CampaignDetailPage({
                   contentId={aprovadoContent.id}
                   canPublish={canPublish}
                   defaultChatId={process.env.TELEGRAM_CHAT_ID ?? ""}
+                  grupos={(grupos ?? []).map((g) => ({
+                    id: g.id,
+                    name: g.name,
+                    telegram_chat_id: g.telegram_chat_id,
+                  }))}
+                  filas={(filas ?? []).map((f) => ({ id: f.id, name: f.name }))}
                 />
               ) : (
                 <p className="text-center text-sm text-muted-foreground">
@@ -456,6 +480,60 @@ export default async function CampaignDetailPage({
             </CardContent>
           </Card>
         )}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Card do Telegram</CardTitle>
+              <CardDescription>
+                Cor e moldura do card gerado em /og/card/{campanha.id} —
+                vale para a próxima publicação.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {produto ? (
+                <CardConfigForm
+                  productId={produto.id}
+                  initial={produto.card_config as { theme?: string; border?: boolean } | null}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Produto ainda não importado.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Página pública</CardTitle>
+              <CardDescription>
+                Landing page da oferta (vitrine CanalTopfy)
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              {campanha.slug && (
+                <a
+                  href={`/c/${campanha.slug}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block break-all text-primary hover:underline"
+                >
+                  /c/{campanha.slug}
+                </a>
+              )}
+              {ctaLink && (
+                <CopyTextButton
+                  copyText={`Ver oferta na loja: ${ctaLink}`}
+                  link={ctaLink}
+                />
+              )}
+              <p className="text-xs text-muted-foreground">
+                O CTA da mensagem sempre aponta para o redirect first-party
+                /r/&lt;id&gt;, que rastreia o clique antes de levar à loja.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );

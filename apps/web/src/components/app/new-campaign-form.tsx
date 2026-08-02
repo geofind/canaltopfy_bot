@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   createCampaignFromUrl,
@@ -10,8 +10,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const initialState: CampaignActionState = {};
 
-export function NewCampaignForm() {
+export function NewCampaignForm({ initialUrl = "" }: { initialUrl?: string }) {
   const router = useRouter();
+  const [url, setUrl] = useState(initialUrl);
   const [state, formAction, pending] = useActionState(
     createCampaignFromUrl,
     initialState,
@@ -43,6 +44,8 @@ export function NewCampaignForm() {
           name="url"
           type="url"
           required
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
           placeholder="https://pt.aliexpress.com/item/10050012345.html"
           className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         />

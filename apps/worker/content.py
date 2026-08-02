@@ -36,6 +36,20 @@ ALLOWED_PROVIDERS = ("auto", "openrouter", "openai", "anthropic", "fallback", "m
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# Rótulos de loja para os textos por loja (Fase A): a copy nasce
+# contextualizada com a loja de origem — nunca inventa nome.
+LOJA_LABEL = {
+    "aliexpress": "AliExpress",
+    "amazon": "Amazon",
+    "mercadolivre": "Mercado Livre",
+    "mercadolibre": "Mercado Livre",
+}
+
+
+def _nome_loja(loja: Optional[str]) -> Optional[str]:
+    nome = LOJA_LABEL.get(loja or "", "").strip()
+    return nome or None
+
 
 def _fmt_preco(valor: Optional[float]) -> str:
     return f"R$ {valor:.2f}" if valor is not None else "a confirmar"
@@ -60,12 +74,21 @@ def _fatos(product: dict[str, Any]) -> list[str]:
     return fatos
 
 
-def _headline_variantes(product: dict[str, Any]) -> list[str]:
+def _headline_variantes(product: dict[str, Any],
+                        loja: Optional[str] = None) -> list[str]:
     nome = _nome(product)
     atual = product.get("current_price")
     original = product.get("original_price")
+    loja_nome = _nome_loja(loja)
     if atual is not None and original is not None and original > atual:
         preco_atual, preco_original = _fmt_preco(atual), _fmt_preco(original)
+        if loja_nome:
+            return [
+                f"{nome} na {loja_nome} — de {preco_original} por {preco_atual}",
+                f"{nome} caiu de preço na {loja_nome}: agora {preco_atual}",
+                f"Encontrei {nome} na {loja_nome} por {preco_atual} "
+                f"(era {preco_original})",
+            ]
         return [
             f"{nome} — de {preco_original} por {preco_atual}",
             f"{nome} caiu de preço: agora {preco_atual}",
@@ -73,6 +96,9 @@ def _headline_variantes(product: dict[str, Any]) -> list[str]:
         ]
     if atual is not None:
         preco_atual = _fmt_preco(atual)
+        if loja_nome:
+            return [f"{nome} na {loja_nome} — {preco_atual}",
+                    f"{nome} por {preco_atual} na {loja_nome}"]
         return [f"{nome} — {preco_atual}", f"{nome} por {preco_atual}"]
     return [f"{nome} — preço a confirmar"]
 
@@ -81,21 +107,28 @@ def _cta_variantes(product: dict[str, Any]) -> list[str]:
     return ["Ver oferta", "Conferir na loja", "Ver oferta na loja"]
 
 
-def _gerar_fallback(product: dict[str, Any], template_id: str, seed: Optional[int]) -> dict[str, str]:
+def _gerar_fallback(product: dict[str, Any], template_id: str, seed: Optional[int],
+                    loja: Optional[str] = None) -> dict[str, str]:
     rng = random.Random(seed)
     fatos = _fatos(product)
     if template_id == "oferta-curta":
         nome = _nome(product)
         preco = product.get("current_price")
-        body = (f"{nome}\n{_fmt_preco(preco)}" if preco is not None
-                else f"{nome}\nPreço a confirmar na loja.")
+        loja_nome = _nome_loja(loja)
+        if loja_nome:
+            body = (f"{nome} na {loja_nome}\n{_fmt_preco(preco)}"
+                    if preco is not None
+                    else f"{nome} na {loja_nome}\nPreço a confirmar na loja.")
+        else:
+            body = (f"{nome}\n{_fmt_preco(preco)}" if preco is not None
+                    else f"{nome}\nPreço a confirmar na loja.")
     elif template_id == "oferta-beneficios":
         body = "O que já está confirmado:\n" + "\n".join(f"- {f}" for f in fatos)
     else:
         body = "Fatos observados na ficha:\n" + "\n".join(f"- {f}" for f in fatos)
     return {
         "template_id": template_id,
-        "headline": rng.choice(_headline_variantes(product)),
+        "headline": rng.choice(_headline_variantes(product, loja)),
         "body": body,
         "cta": rng.choice(_cta_variantes(product)),
         "disclaimer": DISCLAIMER_PADRAO,
@@ -106,7 +139,8 @@ def _openrouter_disponivel() -> bool:
     return bool(os.environ.get("OPENROUTER_API_KEY"))
 
 
-def _gerar_openrouter(product: dict[str, Any], template_id: str) -> Optional[dict[str, str]]:
+def _gerar_openrouter(product: dict[str, Any], template_id: str,
+                      loja: Optional[str] = None) -> Optional[dict[str, str]]:
     """Chama a API da OpenRouter (openrouter.ai — agregador de LLMs, API
     compatível com o formato OpenAI) com um prompt estrito — a resposta é
     validada depois por validar_copy e por fatos; qualquer coisa fora do
@@ -123,6 +157,7 @@ def _gerar_openrouter(product: dict[str, Any], template_id: str) -> Optional[dic
         "você comprar por aqui, o Topfy pode ganhar uma comissão, sem "
         "custo extra para você.\"\n\n"
         f"Fatos:\n{json.dumps(product, ensure_ascii=False)}"
+        + (f"\nLoja de origem: {_nome_loja(loja)}" if _nome_loja(loja) else "")
     )
     body = json.dumps({
         "model": model,
@@ -158,9 +193,11 @@ def gerar_copy(
     *,
     provider: str = "auto",
     seed: Optional[int] = None,
+    loja: Optional[str] = None,
 ) -> dict[str, Any]:
     """Gera a copy. provider='auto': tenta openrouter e cai no fallback;
-    'fallback'/'manual': só determinístico (para testes e modo offline)."""
+    'fallback'/'manual': só determinístico (para testes e modo offline).
+    `loja` (source_name) contextualiza os textos por loja no fallback."""
     if template_id not in TEMPLATES:
         raise ValueError(f"template desconhecido: {template_id!r} (use um de {TEMPLATES})")
 
@@ -169,21 +206,21 @@ def gerar_copy(
 
     if provider == "manual":
         return {
-            **(_gerar_fallback(product, template_id, seed)),
+            **(_gerar_fallback(product, template_id, seed, loja)),
             "provider": "manual",
             "model": None,
         }
 
     if provider == "auto" or provider == "openrouter":
         if _openrouter_disponivel():
-            resultado = _gerar_openrouter(product, template_id)
+            resultado = _gerar_openrouter(product, template_id, loja)
             if resultado and not validar_copy(resultado):
                 return {**resultado, "provider": "openrouter", "model": os.environ.get("OPENROUTER_MODEL")}
         if provider == "openrouter":
             raise RuntimeError("openrouter não respondeu — use provider='auto' para fallback.")
-        return {**(_gerar_fallback(product, template_id, seed)), "provider": "fallback", "model": None}
+        return {**(_gerar_fallback(product, template_id, seed, loja)), "provider": "fallback", "model": None}
 
-    return {**(_gerar_fallback(product, template_id, seed)), "provider": "fallback", "model": None}
+    return {**(_gerar_fallback(product, template_id, seed, loja)), "provider": "fallback", "model": None}
 
 
 def validar_copy(copy: dict[str, Any]) -> list[str]:

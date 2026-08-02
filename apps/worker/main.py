@@ -20,7 +20,8 @@ except ImportError:
 
 import db
 from pipeline import (import_product, generate_affiliate_link, compute_score,
-                      generate_copies, publish_to_telegram)
+                      generate_copies, montar_copy_text, publish_to_telegram,
+                      enviar_mensagem_grupo, regenerate_copies, dispatch_queues)
 
 POLL_INTERVAL_SECONDS = 5
 
@@ -31,10 +32,15 @@ def process_job(job: dict[str, Any]) -> None:
     org = job.get("organization_id")
 
     if tipo == "product.import":
+        product_id = payload.get("product_id")
+        campaign_id = payload.get("campaign_id")
+        if not product_id or not campaign_id:
+            raise ValueError(
+                "job product.import sem product_id/campaign_id — precisa "
+                "ser criado por createCampaignFromUrl (web)")
+
         row = import_product(payload["source_name"], payload["url"])
-        produto = db._get().table("products").insert({
-            **row, "organization_id": org}).execute()
-        product_id = produto.data[0]["id"]
+        db._get().table("products").update(row).eq("id", product_id).execute()
         db.register_audit(org, actor_type="worker", action="produto_importado",
                           entity_type="product", entity_id=str(product_id),
                           metadata={"source_name": payload["source_name"]})
@@ -56,16 +62,11 @@ def process_job(job: dict[str, Any]) -> None:
             "status": "READY",
         }).eq("id", product_id).execute()
 
-        campanha = db._get().table("campaigns").insert({
-            "organization_id": org,
-            "product_id": product_id,
+        db._get().table("campaigns").update({
             "status": "READY",
-            "platform": "telegram",
-            "mode": "simulated",
             "title": product_row.get("title"),
-        }).execute()
-        campaign_id = campanha.data[0]["id"]
-        db.register_audit(org, actor_type="worker", action="campanha_criada",
+        }).eq("id", campaign_id).execute()
+        db.register_audit(org, actor_type="worker", action="campanha_atualizada",
                           entity_type="campaign", entity_id=str(campaign_id))
 
         copias = generate_copies(product_row)
@@ -77,9 +78,7 @@ def process_job(job: dict[str, Any]) -> None:
                 "status": "DRAFT" if validation_errors else "PENDING_REVIEW",
                 "provider": copia.pop("provider", "fallback"),
                 "model": copia.pop("model", None),
-                "copy_text": (
-                    f"{copia.get('headline', '')}\n\n{copia.get('body', '')}\n\n"
-                    f"{copia.get('cta', 'Ver oferta')}\n\n{copia.get('disclaimer', '')}"),
+                "copy_text": montar_copy_text(copia),
                 "hooks": [],
                 "compliance": {"validation_errors": validation_errors or []},
             }).execute()
@@ -90,10 +89,31 @@ def process_job(job: dict[str, Any]) -> None:
 
     elif tipo == "publication.telegram":
         resultado = publish_to_telegram(
-            payload["campaign_id"], payload["content_id"], payload["chat_id"])
+            payload["campaign_id"], payload["content_id"],
+            payload.get("chat_id", ""), payload.get("group_id"))
         db.register_audit(org, actor_type="worker", action="publicacao_telegram",
                           entity_type="publication",
                           entity_id=str(resultado["publication_id"]),
+                          metadata=resultado)
+
+    elif tipo == "telegram.send":
+        group_id = payload.get("group_id")
+        text = payload.get("text", "")
+        if not group_id or not text:
+            raise ValueError(
+                "job telegram.send precisa de group_id e text no payload")
+        resultado = enviar_mensagem_grupo(group_id, text)
+        db.register_audit(org, actor_type="user", action="telegram_mensagem_livre",
+                          entity_type="channel_group", entity_id=str(group_id),
+                          metadata=resultado)
+
+    elif tipo == "content.regenerate":
+        campaign_id = payload.get("campaign_id")
+        if not campaign_id:
+            raise ValueError("job content.regenerate sem campaign_id")
+        resultado = regenerate_copies(campaign_id)
+        db.register_audit(org, actor_type="user", action="copies_regeneradas",
+                          entity_type="campaign", entity_id=str(campaign_id),
                           metadata=resultado)
 
     else:
@@ -102,6 +122,12 @@ def process_job(job: dict[str, Any]) -> None:
 
 def run_forever() -> None:
     while True:
+        try:
+            despachados = dispatch_queues()
+            if despachados:
+                print(f"[worker] filas: {len(despachados)} item(ns) despachado(s)")
+        except Exception as exc:  # filas: nunca derruba o loop
+            print(f"[worker] erro ao despachar filas: {exc}", file=sys.stderr)
         try:
             job = db.get_next_job()
         except Exception as exc:  # rede/credencial — continua tentando

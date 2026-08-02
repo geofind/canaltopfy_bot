@@ -14,6 +14,28 @@ const brl = new Intl.NumberFormat("pt-BR", {
   currency: "BRL",
 });
 
+const CARD_THEMES: Record<
+  string,
+  { gradient: string; border: string }
+> = {
+  navy: {
+    gradient: "linear-gradient(160deg, #0B1220 0%, #101A2C 45%, #0D1524 100%)",
+    border: "rgba(148, 163, 184, 0.25)",
+  },
+  verde: {
+    gradient: "linear-gradient(160deg, #042F1F 0%, #064E3B 45%, #052E2A 100%)",
+    border: "rgba(52, 211, 153, 0.45)",
+  },
+  amarelo: {
+    gradient: "linear-gradient(160deg, #241C02 0%, #3B2F04 45%, #2E2802 100%)",
+    border: "rgba(251, 191, 36, 0.45)",
+  },
+  vermelho: {
+    gradient: "linear-gradient(160deg, #2B0A10 0%, #4C131C 45%, #3A0E16 100%)",
+    border: "rgba(248, 113, 113, 0.45)",
+  },
+};
+
 type Font = {
   name: string;
   data: ArrayBuffer | Buffer;
@@ -69,7 +91,11 @@ export async function GET(
     discounted_price_brl: number | null;
     discount_pct: number | null;
     score: number | null;
+    card_config: { theme?: string; border?: boolean } | null;
   } | null;
+
+  const cardConfig = produto?.card_config ?? {};
+  const tema = CARD_THEMES[cardConfig.theme ?? "navy"] ?? CARD_THEMES.navy;
 
   const titulo = produto?.title ?? campanha.title ?? "Oferta em destaque";
   const tituloLinhas = Math.min(
@@ -77,9 +103,12 @@ export async function GET(
     Math.max(1, Math.ceil((titulo.length * 44) / 800)),
   );
 
-  const imageUrl = produto?.image_url
-    ? await fetchImageAsDataUrl(produto.image_url)
-    : null;
+  // Imagem real do produto: usa a gravada no produto ou a passada na hora
+  // do post (worker captura og:image da página da loja — sem banco de
+  // imagens, só para compor o card).
+  const imgParam = new URL(req.url).searchParams.get("img");
+  const imageUrl = produto?.image_url ?? (imgParam || null);
+  const imagemReal = imageUrl ? await fetchImageAsDataUrl(imageUrl) : null;
 
   const hasPrice = produto?.discounted_price_brl != null;
   const desconto =
@@ -96,19 +125,32 @@ export async function GET(
   const fonts = await loadFonts();
 
   const card = (
-    <div
-      style={{
-        width: "100%",
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        padding: "64px",
-        background:
-          "linear-gradient(160deg, #0B1220 0%, #101A2C 45%, #0D1524 100%)",
-        color: "#F8FAFC",
-        fontFamily: "Inter",
-      }}
-    >
+<div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          padding: cardConfig.border ? 14 : 64,
+          color: "#F8FAFC",
+          fontFamily: "Inter",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            padding: cardConfig.border ? 50 : 64,
+            background: tema.gradient,
+            borderRadius: cardConfig.border ? 28 : 0,
+            backgroundImage: tema.gradient,
+            border: cardConfig.border
+              ? `10px solid ${tema.border}`
+              : "none",
+          }}
+        >
       <div
         style={{
           display: "flex",
@@ -160,10 +202,10 @@ export async function GET(
           paddingBottom: 36,
         }}
       >
-        {imageUrl ? (
+        {imagemReal ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={imageUrl}
+            src={imagemReal}
             alt={titulo}
             width={500}
             height={500}
@@ -300,6 +342,7 @@ export async function GET(
         <span style={{ fontSize: 22, fontWeight: 400, color: "#64748B" }}>
           comissão sem custo extra
         </span>
+      </div>
       </div>
     </div>
   );
