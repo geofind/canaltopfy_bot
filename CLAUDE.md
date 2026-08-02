@@ -27,7 +27,18 @@ com link de afiliado rastreado. MVP funcional, em pt-BR.
   (ML conectar/desconectar, status Telegram), detalhe da campanha com
   cliques/conversões/comissão (últimos 20).
 - Testes: worker 28/28 (py 3.14.6 e 3.11); E2E Playwright 9/9 (chromium).
-- Build, lint e tsc limpos. Último commit: f38f44d1.
+- Build, lint e tsc limpos. Último commit: c60e9413 (já no GitHub:
+  github.com/geofind/canaltopfy_bot, branch master).
+
+## Estado do deploy
+- Artefatos prontos e no repo: vercel.json (root apps/web), Dockerfile do
+  worker, docs/DEPLOY.md (inclui checklist pós-deploy).
+- Web: pendente de importar na Vercel (dashboard, vercel.com/new) — env vars
+  listadas em docs/DEPLOY.md; ML_REDIRECT_URI do domínio final deve ser
+  cadastrada no app do ML.
+- Worker: pendente de subir (Railway/VPS) — docker build apps/worker.
+- Push requer GITHUB_TOKEN do .env (credenciais do Windows Credential
+  Manager estão velhas: git push "https://geofind:<TOKEN>@github.com/...").
 
 ## Regras NÃO-NEGOCIÁVEIS
 1. NUNCA commitar o .env (tem tokens reais: Supabase, Telegram, OpenRouter).
@@ -44,15 +55,15 @@ com link de afiliado rastreado. MVP funcional, em pt-BR.
 7. Endpoints do Next 16 mudam (redirect/rewrites → proxy, cache → cache
    components). Sempre confirmar no docs local antes de mexer.
 
-## Próxima tarefa (única pendente): DEPLOY
-1. Vercel para apps/web: vercel.json (framework nextjs, root apps/web), env
-   vars (NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
-   ML_CLIENT_ID, ML_CLIENT_SECRET, ML_REDIRECT_URI do domínio final,
-   CANALTOPFY_PUBLIC_BASE_URL=https://<domínio>), checar se pode
-   rodar `vercel` CLI (peça permissão antes).
-2. Worker: Dockerfile (python:3.14-slim, stdlib only) + docs de execução
-   (poll de jobs no Supabase).
-3. Atualizar docs/ROADMAP.md (Fase 1 100%) e canetar o que mudar.
+## Próxima tarefa (única pendente): DEPLOY EXECUTAR
+1. Vercel para apps/web: vercel.com/new importando geofind/canaltopfy_bot
+   (vercel.json já aponta root apps/web). Env vars em docs/DEPLOY.md;
+   trocar ML_REDIRECT_URI e CANALTOPFY_PUBLIC_BASE_URL para o domínio
+   final e cadastrar a URI no app do ML. Depois seguir o checklist
+   pós-deploy (docs/DEPLOY.md).
+2. Worker: docker build apps/worker e subir no Railway/VPS com as env
+   vars do docs/DEPLOY.md (uma réplica; get_next_job não tem lock).
+3. Revogar GITHUB_TOKEN do .env quando não precisar mais push.
 
 ## Verificação
 - Web: cd apps/web; npm run lint; npx tsc --noEmit; npm run build.

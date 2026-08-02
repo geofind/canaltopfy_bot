@@ -77,3 +77,32 @@ O worker não expõe porta HTTP — ele é um consumidor de fila. Rode **uma
 réplica**: o `get_next_job` (apps/worker/db.py) faz select→marca running
 sem lock atômico, então duas réplicas podem disputar o mesmo job. Se no
 futuro precisar escalar, troque por `select ... for update skip locked`.
+
+## Checklist pós-deploy (web + worker)
+
+Fazer nesta ordem, logo após o primeiro deploy:
+
+1. **Login** — `/login` entra com a conta existente; rotas autenticadas
+   (`/campanhas`, `/sistema`, `/integracoes`) redirecionam para `/login`
+   sem sessão.
+2. **Campanha AliExpress** — em `/campanhas/nova`, colar URL de produto.
+   Com o worker rodando, o status passa IMPORTED → READY →
+   CONTENT_GENERATING → REVIEW_REQUIRED (confira em `/sistema` os jobs).
+3. **Campanha Mercado Livre** — mesma coisa com URL
+   `produto.mercadolivre.com.br/MLB-...`; o conector usa a API pública
+   (sem token). Se a API pública continuar dando 403 de produção,
+   investigar antes de confiar no modo API (ver docs/API_INTEGRATIONS.md).
+4. **Rastreamento** — abrir o detalhe da campanha: seção "Rastreamento"
+   mostra cliques/conversões (pode estar zerada no início, é normal).
+5. **ML OAuth** — em `/integracoes`, Conectar → autorizar no ML → voltar
+   ao `/callback` → badge "Conectado" (e token com data de expiração).
+6. **Telegram** — em `/integracoes`, conferir `@canaltopfy_bot` e o
+   chat id; agendar/liberar publicação e conferir a mensagem no grupo:
+   foto + texto + link de afiliado. O card do link (`/og/card/<id>`) só
+   renderiza em URL pública (o Telegram baixa a imagem pelos servidores
+   dele — localhost/lvh.me não funcionam).
+7. **Links públicos** — `/c/<slug>` (vitrine), `/r/<id>` (redirect) e
+   `/og/card/<id>` acessíveis sem sessão; `/r/<id>` inexistente manda
+   para `/`.
+8. **Worker de pé** — `docker ps` mostrando o contêiner; em `/sistema`,
+   "Atividade do worker" atualizando conforme jobs são processados.
