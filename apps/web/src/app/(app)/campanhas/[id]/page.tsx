@@ -123,9 +123,12 @@ export default async function CampaignDetailPage({
           ← Campanhas
         </Link>
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {campanha.title || produto?.title || "Campanha"}
-          </h1>
+          <div className="space-y-1">
+            <p className="eyebrow">Detalhe da campanha</p>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {campanha.title || produto?.title || "Campanha"}
+            </h1>
+          </div>
           <Badge variant="secondary">
             {STATUS_LABEL[campanha.status] ?? campanha.status}
           </Badge>

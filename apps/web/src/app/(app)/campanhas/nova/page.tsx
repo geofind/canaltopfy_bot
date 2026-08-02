@@ -21,6 +21,7 @@ export default function NewCampaignPage() {
         <h1 className="text-2xl font-semibold tracking-tight">
           Nova campanha
         </h1>
+        <p className="eyebrow">Importação manual</p>
       </div>
 
       <Card>

@@ -10,12 +10,15 @@ type MlTokenResponse = {
   expires_in: number;
   scope: string;
   user_id: string;
-  refresh_token: string;
+  // Este app do ML não emite refresh_token nas respostas observadas —
+  // access_token expira em ~6h e reconectar exige refazer o fluxo OAuth.
+  refresh_token?: string;
 };
 
 async function exchangeCode(
   code: string,
   redirectUri: string,
+  codeVerifier: string,
 ): Promise<MlTokenResponse> {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -23,6 +26,7 @@ async function exchangeCode(
     client_secret: process.env.ML_CLIENT_SECRET ?? "",
     code,
     redirect_uri: redirectUri,
+    code_verifier: codeVerifier,
   });
 
   const res = await fetch(ML_TOKEN_URL, {
@@ -32,7 +36,10 @@ async function exchangeCode(
     cache: "no-store",
   });
   if (!res.ok) {
-    throw new Error(`Mercado Livre rejeitou a troca do code: ${res.status}`);
+    const corpo = await res.text().catch(() => "");
+    throw new Error(
+      `Mercado Livre rejeitou a troca do code: ${res.status} ${corpo}`,
+    );
   }
   return res.json();
 }
@@ -51,14 +58,19 @@ export async function GET(request: NextRequest) {
 
   const cookieStore = await cookies();
   const stateCookie = cookieStore.get("ml_oauth_state")?.value;
+  const codeVerifier = cookieStore.get("ml_oauth_verifier")?.value;
 
   if (!stateCookie || state !== stateCookie) {
     return home(request, "invalid_state");
   }
   cookieStore.delete("ml_oauth_state");
+  cookieStore.delete("ml_oauth_verifier");
 
   if (!code) {
     return home(request, "error");
+  }
+  if (!codeVerifier) {
+    return home(request, "missing_verifier");
   }
 
   const supabase = await createClient();
@@ -76,8 +88,9 @@ export async function GET(request: NextRequest) {
 
   let token: MlTokenResponse;
   try {
-    token = await exchangeCode(code, redirectUri);
-  } catch {
+    token = await exchangeCode(code, redirectUri, codeVerifier);
+  } catch (erro) {
+    console.error("ML callback: troca de code falhou —", erro);
     return home(request, "exchange_failed");
   }
 
@@ -97,7 +110,7 @@ export async function GET(request: NextRequest) {
       organization_id: profile.organization_id,
       user_id: user.id,
       access_token: token.access_token,
-      refresh_token: token.refresh_token,
+      refresh_token: token.refresh_token ?? null,
       expires_at: expiresAt,
       scope: token.scope ?? null,
       ml_user_id: token.user_id ?? null,
@@ -106,6 +119,7 @@ export async function GET(request: NextRequest) {
   );
 
   if (upsertError) {
+    console.error("ML callback: falha ao salvar ml_credentials —", upsertError);
     return home(request, "save_failed");
   }
 

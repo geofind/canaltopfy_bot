@@ -1,6 +1,6 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -25,6 +25,42 @@ function sourceNameFromUrl(url: string): string {
 
 export type AuthActionState = { error?: string };
 
+// Cria organization+profile se ainda não existirem para este usuário.
+// Precisa ser chamada com uma sessão já ativa (RLS de organizations exige
+// auth.uid() não nulo) — por isso signUp() sozinho não basta quando o
+// projeto exige confirmação de e-mail: signUp() não estabelece sessão até
+// a confirmação, então o insert falhava em silêncio. Chamar isso de novo
+// em signIn() faz a conta se autocurar no primeiro login real.
+async function ensureProfile(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  email: string,
+): Promise<void> {
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("id", userId)
+    .maybeSingle();
+  if (profile) {
+    return;
+  }
+
+  const orgName = email.split("@")[0] || "Minha Organização";
+  const { data: org, error: orgError } = await supabase
+    .from("organizations")
+    .insert({ name: orgName, slug: `org-${Date.now()}` })
+    .select()
+    .single();
+  if (!orgError && org) {
+    await supabase.from("profiles").insert({
+      id: userId,
+      organization_id: org.id,
+      full_name: orgName,
+      role: "owner",
+    });
+  }
+}
+
 export async function signIn(
   _prev: AuthActionState,
   formData: FormData,
@@ -33,9 +69,12 @@ export async function signIn(
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
 
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
     return { error: "E-mail ou senha inválidos." };
+  }
+  if (data.user) {
+    await ensureProfile(supabase, data.user.id, email);
   }
   redirect("/");
 }
@@ -57,21 +96,10 @@ export async function signUp(
     return { error: "Não foi possível criar a conta. Verifique o e-mail." };
   }
 
-  if (data.user) {
-    const orgName = email.split("@")[0] || "Minha Organização";
-    const { data: org, error: orgError } = await supabase
-      .from("organizations")
-      .insert({ name: orgName, slug: `org-${Date.now()}` })
-      .select()
-      .single();
-    if (!orgError && org) {
-      await supabase.from("profiles").insert({
-        id: data.user.id,
-        organization_id: org.id,
-        full_name: orgName,
-        role: "owner",
-      });
-    }
+  if (data.user && data.session) {
+    // Só existe sessão aqui quando o projeto não exige confirmação de
+    // e-mail; caso exija, ensureProfile roda no primeiro signIn.
+    await ensureProfile(supabase, data.user.id, email);
   }
 
   redirect("/");
@@ -99,8 +127,20 @@ export async function connectMercadoLivre() {
   }
 
   const state = randomUUID();
+  // PKCE (RFC 7636) — o app do Mercado Livre exige code_challenge/
+  // code_verifier além do state; sem isso o /oauth/token responde
+  // "code_verifier is a required parameter".
+  const codeVerifier = randomBytes(32).toString("base64url");
+  const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
+
   const cookieStore = await cookies();
   cookieStore.set("ml_oauth_state", state, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 600,
+  });
+  cookieStore.set("ml_oauth_verifier", codeVerifier, {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
@@ -112,6 +152,8 @@ export async function connectMercadoLivre() {
     client_id: clientId,
     redirect_uri: redirectUri,
     state,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
   });
 
   redirect(`https://auth.mercadolivre.com.br/authorization?${params.toString()}`);

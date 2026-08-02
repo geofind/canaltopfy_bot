@@ -35,6 +35,7 @@ export default async function IntegracoesPage() {
   return (
     <div className="space-y-8">
       <div className="space-y-1">
+        <p className="eyebrow">Conexões</p>
         <h1 className="text-2xl font-semibold tracking-tight">Integrações</h1>
         <p className="text-sm text-muted-foreground">
           Conexões usadas pelo pipeline de importação e publicação.

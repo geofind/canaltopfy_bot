@@ -380,3 +380,28 @@ create policy "publications_public_read" on publications
               and c.public_page = true
         )
     );
+
+-- ============================================================
+-- 0006 — credenciais Mercado Livre (OAuth do app)
+-- refresh_token já nullable de origem (0007): a resposta de
+-- /oauth/token deste app do ML não inclui refresh_token — só
+-- access_token, token_type, expires_in, scope, user_id.
+-- access_token expira em ~6h; reconectar exige refazer o OAuth.
+-- ============================================================
+create table if not exists ml_credentials (
+    organization_id uuid primary key references organizations(id) on delete cascade,
+    user_id         uuid references auth.users(id) on delete set null,
+    access_token    text not null,
+    refresh_token   text,
+    expires_at      timestamptz,
+    scope           text,
+    ml_user_id      text,
+    created_at      timestamptz not null default now(),
+    updated_at      timestamptz not null default now()
+);
+
+alter table ml_credentials enable row level security;
+
+create policy "ml_credentials_org" on ml_credentials
+    for all using (organization_id = public.current_org_id())
+    with check (organization_id = public.current_org_id());

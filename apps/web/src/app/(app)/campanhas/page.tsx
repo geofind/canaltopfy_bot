@@ -28,7 +28,10 @@ export default async function CampanhasPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Campanhas</h1>
+      <div className="space-y-1">
+        <p className="eyebrow">Operação</p>
+        <h1 className="text-2xl font-semibold tracking-tight">Campanhas</h1>
+      </div>
 
       {!campanhas || campanhas.length === 0 ? (
         <div className="rounded-md border border-dashed py-16 text-center text-sm text-muted-foreground">

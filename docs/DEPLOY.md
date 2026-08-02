@@ -33,6 +33,11 @@ Vercel resolve as deps de apps/web normalmente.
   dependem de `CANALTOPFY_PUBLIC_BASE_URL` apontando para o domínio público —
   localhost/lvh.me não funciona porque o Telegram baixa as imagens pelos
   servidores dele.
+- A suíte E2E (`apps/web/e2e/`) roda contra qualquer domínio já implantado:
+  `E2E_BASE_URL=https://<domínio> npm run test:e2e` (sem essa env var, sobe
+  um dev server local como sempre). Cobre login, guarda de rota, criação de
+  campanha (AliExpress/ML) e as rotas públicas — não cobre OAuth do ML nem
+  publicação real no Telegram, que exigem consentimento humano no navegador.
 
 ## Worker (apps/worker) — contêiner
 
