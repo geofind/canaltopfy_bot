@@ -1,6 +1,0 @@
-{
-  "framework": "nextjs",
-  "root": "apps/web",
-  "buildCommand": "npm run build",
-  "installCommand": "npm install"
-}
