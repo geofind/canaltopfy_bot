@@ -31,11 +31,13 @@ com link de afiliado rastreado. MVP funcional, em pt-BR.
   github.com/geofind/canaltopfy_bot, branch master).
 
 ## Estado do deploy
-- Artefatos prontos e no repo: vercel.json (root apps/web), Dockerfile do
-  worker, docs/DEPLOY.md (inclui checklist pós-deploy).
-- Web: pendente de importar na Vercel (dashboard, vercel.com/new) — env vars
-  listadas em docs/DEPLOY.md; ML_REDIRECT_URI do domínio final deve ser
-  cadastrada no app do ML.
+- Web NO AR: https://web-lac-seven-pg17eswj7d.vercel.app (Vercel, projeto
+  importado de geofind/canaltopfy_bot). /login e vitrine /c/<slug> OK.
+  NEXT_PUBLIC_SUPABASE_URL/ANON_KEY configuradas na Vercel. Falta conferir
+  ML_CLIENT_ID/ML_CLIENT_SECRET/ML_REDIRECT_URI na Vercel (teste:
+  /integracoes → Conectar).
+- ML: Redirection URI https://web-lac-seven-pg17eswj7d.vercel.app/callback
+  cadastrada no app em developers.mercadolivre.com.br (usuário confirmou).
 - Worker: pendente de subir (Railway/VPS) — docker build apps/worker.
 - Push requer GITHUB_TOKEN do .env (credenciais do Windows Credential
   Manager estão velhas: git push "https://geofind:<TOKEN>@github.com/...").
@@ -56,11 +58,10 @@ com link de afiliado rastreado. MVP funcional, em pt-BR.
    components). Sempre confirmar no docs local antes de mexer.
 
 ## Próxima tarefa (única pendente): DEPLOY EXECUTAR
-1. Vercel para apps/web: vercel.com/new importando geofind/canaltopfy_bot
-   (vercel.json já aponta root apps/web). Env vars em docs/DEPLOY.md;
-   trocar ML_REDIRECT_URI e CANALTOPFY_PUBLIC_BASE_URL para o domínio
-   final e cadastrar a URI no app do ML. Depois seguir o checklist
-   pós-deploy (docs/DEPLOY.md).
+1. Vercel para apps/web: já NO AR em web-lac-seven-pg17eswj7d.vercel.app.
+   Conferir ML_CLIENT_ID/ML_CLIENT_SECRET/ML_REDIRECT_URI (deve ser o
+   domínio de produção) na Vercel; ML_REDIRECT_URI já cadastrada no ML.
+   Depois seguir o checklist pós-deploy (docs/DEPLOY.md).
 2. Worker: docker build apps/worker e subir no Railway/VPS com as env
    vars do docs/DEPLOY.md (uma réplica; get_next_job não tem lock).
 3. Revogar GITHUB_TOKEN do .env quando não precisar mais push.
