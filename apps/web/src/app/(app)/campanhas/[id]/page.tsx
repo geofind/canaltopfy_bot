@@ -71,7 +71,8 @@ export default async function CampaignDetailPage({
     notFound();
   }
 
-  const [{ data: contents }, { data: publications }] = await Promise.all([
+  const [{ data: contents }, { data: publications }, { data: clicks },
+    { data: conversions }] = await Promise.all([
     supabase
       .from("contents")
       .select("*")
@@ -82,7 +83,26 @@ export default async function CampaignDetailPage({
       .select("*")
       .eq("campaign_id", id)
       .order("created_at", { ascending: false }),
+    supabase
+      .from("affiliate_clicks")
+      .select("*")
+      .eq("campaign_id", id)
+      .order("clicked_at", { ascending: false })
+      .limit(20),
+    supabase
+      .from("conversions")
+      .select("*")
+      .eq("campaign_id", id)
+      .order("occurred_at", { ascending: false })
+      .limit(20),
   ]);
+
+  const totalCliques = clicks?.length ?? 0;
+  const totalConversions = conversions?.length ?? 0;
+  const comissaoTotal = (conversions ?? []).reduce(
+    (soma, c) => soma + (Number(c.commission_brl) || 0),
+    0,
+  );
 
   const produto = campanha.product;
   const aprovadoContent = contents?.find((c) => c.status === "APPROVED");
@@ -280,6 +300,104 @@ export default async function CampaignDetailPage({
                 </CardContent>
               </Card>
             ))}
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold">Rastreamento</h2>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Cliques (últimos 20)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-3xl font-semibold">{totalCliques}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Conversões
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-3xl font-semibold">{totalConversions}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Comissão estimada
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-3xl font-semibold">
+                R$ {comissaoTotal.toFixed(2)}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+        {clicks && clicks.length > 0 && (
+          <div className="overflow-hidden rounded-md border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Quando</th>
+                  <th className="px-4 py-3 font-medium">Origem</th>
+                  <th className="px-4 py-3 font-medium">UTM</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {clicks.map((click) => (
+                  <tr key={click.id} className="hover:bg-muted/50">
+                    <td className="px-4 py-3">
+                      {new Date(click.clicked_at).toLocaleString("pt-BR")}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {click.referrer || "direto"}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {click.utm_campaign || click.utm_source || "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {conversions && conversions.length > 0 && (
+          <div className="overflow-hidden rounded-md border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Ocorreu em</th>
+                  <th className="px-4 py-3 font-medium">Valor</th>
+                  <th className="px-4 py-3 font-medium">Comissão</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {conversions.map((conv) => (
+                  <tr key={conv.id} className="hover:bg-muted/50">
+                    <td className="px-4 py-3">
+                      {new Date(conv.occurred_at).toLocaleString("pt-BR")}
+                    </td>
+                    <td className="px-4 py-3">
+                      R$ {Number(conv.amount_brl ?? 0).toFixed(2)}
+                    </td>
+                    <td className="px-4 py-3">
+                      R$ {Number(conv.commission_brl ?? 0).toFixed(2)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant="secondary">{conv.status}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

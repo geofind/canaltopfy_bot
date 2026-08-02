@@ -117,6 +117,13 @@ export async function connectMercadoLivre() {
   redirect(`https://auth.mercadolivre.com.br/authorization?${params.toString()}`);
 }
 
+export async function disconnectMercadoLivre() {
+  const supabase = await createClient();
+  await supabase.from("ml_credentials").delete().neq("organization_id", "");
+  revalidatePath("/integracoes");
+  revalidatePath("/");
+}
+
 export type CampaignActionState = { error?: string; ok?: boolean };
 
 export async function createCampaignFromUrl(

@@ -1,20 +1,26 @@
 # Roadmap
 
-## Fase 1 — MVP (em andamento)
+## Fase 1 — MVP (concluída)
 
 - [x] Monorepo Next.js + worker Python + migrations
 - [x] Schema PostgreSQL: products, campaigns, contents, publications,
       clicks, conversions, jobs, audit_log + RLS
 - [x] Worker: conector AliExpress (API oficial), score, copy, Telegram,
       adapters simulados
-- [x] Testes do worker (20 testes stdlib)
+- [x] Testes do worker (28 testes stdlib)
 - [x] Telas: dashboard, nova campanha (colar URL), aprovação de copy,
       publicações, cliques
 - [x] Vitrine pública `/c/<slug>` + redirect `/r/<id>`
 - [x] Card via `next/og` (`/og/card/<id>`, RLS anon para vitrine)
 - [x] Testes E2E (Playwright: auth, nova campanha, vitrine/card/redirect
       públicos — `apps/web/e2e/`)
-- [ ] Deploy: Vercel (web) + worker (VPS/RAILWAY)
+- [x] Importação Mercado Livre (OAuth + conector API pública)
+- [x] Publicação Telegram real no grupo padrão (`TELEGRAM_CHAT_ID`)
+- [x] Site de controle: `/sistema` (jobs/falhas/atividade do worker),
+      `/integracoes` (ML, Telegram), rastreamento por campanha
+- [x] Deploy: artefatos prontos — `vercel.json`, Dockerfile do worker
+      (`apps/worker/Dockerfile`) e `docs/DEPLOY.md` (executar passo a passo
+      no Vercel/Railway/VPS)
 
 ## Fase 2 — Canais e conectores
 
@@ -23,7 +29,6 @@
 - TikTok Content Posting API (após auditoria)
 - Instagram Graph API (conta Business/Creator + App Review)
 - YouTube Data API v3
-- Importação manual Mercado Livre (automação proibida pela plataforma)
 
 ## Fase 3 — Automações supervisionadas
 

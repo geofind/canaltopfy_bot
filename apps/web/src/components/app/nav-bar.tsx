@@ -28,6 +28,18 @@ export function NavBar() {
             >
               Nova campanha
             </Link>
+            <Link
+              href="/sistema"
+              className="text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Sistema
+            </Link>
+            <Link
+              href="/integracoes"
+              className="text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Integrações
+            </Link>
           </nav>
         </div>
         <form action={signOut}>

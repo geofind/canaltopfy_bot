@@ -94,3 +94,4 @@ npm run test:e2e
 | Banco de dados | `docs/DATABASE.md` |
 | Segurança | `docs/SECURITY.md` |
 | Integrações | `docs/API_INTEGRATIONS.md` |
+| Deploy | `docs/DEPLOY.md` |

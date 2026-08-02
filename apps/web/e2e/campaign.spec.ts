@@ -27,7 +27,7 @@ test.describe("nova campanha", () => {
     await adminClient.from("products").delete().eq("source_url", url);
   });
 
-  test("URL fora da AliExpress mostra erro de validação", async ({ page }) => {
+  test("URL fora da AliExpress/Mercado Livre mostra erro de validação", async ({ page }) => {
     await page.goto("/campanhas/nova");
     await page.locator("#url").fill("https://www.amazon.com/dp/B000000000");
     await page
@@ -35,8 +35,24 @@ test.describe("nova campanha", () => {
       .click();
 
     await expect(
-      page.getByText("Por enquanto aceitamos apenas URLs da AliExpress."),
+      page.getByText("Por enquanto aceitamos URLs da AliExpress ou do Mercado Livre."),
     ).toBeVisible();
     await expect(page).toHaveURL(/\/campanhas\/nova/);
+  });
+
+  test("criar campanha a partir de uma URL do Mercado Livre", async ({ page }) => {
+    const url = `https://produto.mercadolivre.com.br/MLB-${Date.now().toString().slice(-10)}-fone-e2e-_JM`;
+
+    await page.goto("/campanhas/nova");
+    await page.locator("#url").fill(url);
+    await page
+      .getByRole("button", { name: "Importar produto e criar campanha" })
+      .click();
+
+    await expect(page).toHaveURL("/campanhas");
+    await expect(page.getByRole("cell", { name: "Nova campanha" }).first()).toBeVisible();
+
+    // limpeza: apaga o produto criado neste teste (cascade apaga a campanha)
+    await adminClient.from("products").delete().eq("source_url", url);
   });
 });
