@@ -27,7 +27,15 @@ com link de afiliado rastreado. MVP funcional, em pt-BR.
   (ML conectar/desconectar, status Telegram), detalhe da campanha com
   cliques/conversões/comissão (últimos 20).
 - Testes: worker 28/28 (py 3.14.6 e 3.11); E2E Playwright 9/9 (chromium).
-- Build, lint e tsc limpos. Último commit: c60e9413 (já no GitHub:
+- Visual CanalTopfy (referência: TopFy_Affiliate_Lab, não retrogames): sidebar
+  navy #1F2837 250px + topbar com logo-mark, paleta em globals.css (light
+  padrão, bg #F5F5F5, vermelho #D71931, font-display serif, shadow-soft),
+  app-shell.tsx (nav + comissão/cliques no rodapé, drawer mobile),
+  login com logo, eyebrows nos títulos, logos em public/brand/. Removido
+  nav-bar.tsx; dashboard movido para (app)/page.tsx. Icon: src/app/icon.png.
+- OAuth ML: migração 0007 (ml_refresh_token nullable) + callback com
+  auto-refresh de token. Playwright usa baseURL lvh.me (regra 4).
+- Build, lint e tsc limpos. Último commit: 739eac7f (já no GitHub:
   github.com/geofind/canaltopfy_bot, branch master).
 
 ## Estado do deploy
