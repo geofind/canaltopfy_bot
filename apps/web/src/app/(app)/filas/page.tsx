@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +43,20 @@ function one<T>(value: T | T[] | null | undefined): T | null {
   return Array.isArray(value) ? value[0] ?? null : value ?? null;
 }
 
+function formatDuration(hours: number) {
+  const safeMinutes = Math.max(0, Math.round(hours * 60));
+  const h = Math.floor(safeMinutes / 60);
+  const m = safeMinutes % 60;
+  return `${h}h${String(m).padStart(2, "0")}`;
+}
+
+function sourceColor(source: string | null | undefined) {
+  if (source === "mercadolivre") return "bg-[#FFE600]";
+  if (source === "shopee") return "bg-[#EE4D2D]";
+  if (source === "magalu") return "bg-[#0086FF]";
+  return "bg-[#E52B37]";
+}
+
 export default async function FilasPage() {
   const supabase = await createClient();
 
@@ -83,7 +98,36 @@ export default async function FilasPage() {
   }
   // O worker publica no máximo um item por intervalo. Arredondar o instante
   // atual para o próximo minuto evita mostrar segundos que a interface omite.
+  // eslint-disable-next-line react-hooks/purity -- Server Component: calculado uma vez por requisição.
   const proximoMinuto = Math.ceil(Date.now() / 60_000) * 60_000;
+
+  // Visão geral do trilho (todas as filas juntas) — mesma leitura que já
+  // existia no dashboard, agora ao lado de onde o mix é editado de verdade.
+  const intervalMinutesGlobal = Number(filas?.[0]?.interval_minutes ?? 5);
+  const ultimoAgendado = queueItems.at(-1)?.scheduled_at;
+  // eslint-disable-next-line react-hooks/purity -- Server Component: calculado uma vez por requisição.
+  const agora = Date.now();
+  const reserveHours = ultimoAgendado
+    ? Math.max(0, (new Date(ultimoAgendado).getTime() - agora) / 3_600_000)
+    : (queueItems.length * intervalMinutesGlobal) / 60;
+  const queueBySource = queueItems.reduce(
+    (acc, item) => {
+      const product = one(one(item.campaign)?.product);
+      const source =
+        product?.source_name === "mercadolivre" ? "mercadolivre"
+        : product?.source_name === "shopee" ? "shopee"
+        : product?.source_name === "magalu" ? "magalu"
+        : "aliexpress";
+      acc[source] += 1;
+      return acc;
+    },
+    { aliexpress: 0, mercadolivre: 0, shopee: 0, magalu: 0 },
+  );
+  const totalParaShare = queueItems.length || 1;
+  const aliShare = (queueBySource.aliexpress / totalParaShare) * 100;
+  const mlShare = (queueBySource.mercadolivre / totalParaShare) * 100;
+  const shopeeShare = (queueBySource.shopee / totalParaShare) * 100;
+  const magaluShare = (queueBySource.magalu / totalParaShare) * 100;
 
   return (
     <div className="space-y-8">
@@ -100,6 +144,69 @@ export default async function FilasPage() {
           {queueItems.length} oferta(s) aguardando publicação
         </Badge>
       </div>
+
+      {queueItems.length > 0 && (
+        <section className="space-y-4">
+          <div>
+            <p className="eyebrow">Fila navegável</p>
+            <h2 className="mt-1 text-xl font-bold">Próximas ofertas no trilho</h2>
+          </div>
+
+          <div className="rounded-2xl border bg-white p-5 shadow-soft-sm sm:p-7">
+            <div className="grid gap-7 lg:grid-cols-[1fr_280px]">
+              <div className="min-w-0">
+                <div className="flex h-14 items-center gap-2 overflow-x-auto rounded-xl bg-[#F0F2F5] px-4">
+                  <span className="mr-1 shrink-0 text-[9px] font-black uppercase tracking-[.18em] text-muted-foreground">
+                    agora
+                  </span>
+                  <div className="h-px min-w-4 flex-1 bg-[#CBD0D8]" />
+                  {queueItems.slice(0, 24).map((item, index) => {
+                    const campaign = one(item.campaign);
+                    const product = one(campaign?.product);
+                    return (
+                      <Link
+                        key={item.id}
+                        href={campaign?.id ? `/campanhas/${campaign.id}` : "/filas"}
+                        title={`${index + 1}. ${campaign?.title ?? "Oferta"} — ${new Date(item.scheduled_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`}
+                        className={`grid size-4 shrink-0 place-items-center rounded-full ring-4 ring-white transition-transform hover:scale-150 focus-visible:scale-150 ${sourceColor(product?.source_name)}`}
+                        aria-label={`Abrir próxima oferta ${index + 1}: ${campaign?.title ?? "sem título"}`}
+                      >
+                        <span className="size-1 rounded-full bg-black/20" />
+                      </Link>
+                    );
+                  })}
+                  <div className="h-px min-w-4 flex-1 bg-[#CBD0D8]" />
+                  <span className="shrink-0 text-[9px] font-black uppercase tracking-[.18em] text-muted-foreground">
+                    +{formatDuration(reserveHours)}
+                  </span>
+                </div>
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Passe o cursor sobre um ponto ou use Tab para ver e abrir a oferta. Soma todas as filas ativas.
+                </p>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between text-xs font-bold">
+                  <span>Mix das fontes</span>
+                  <span>{queueItems.length} itens</span>
+                </div>
+                <div className="mt-3 flex h-3 overflow-hidden rounded-full bg-muted">
+                  <div className="bg-[#E52B37]" style={{ width: `${aliShare}%` }} />
+                  <div className="bg-[#FFE600]" style={{ width: `${mlShare}%` }} />
+                  <div className="bg-[#EE4D2D]" style={{ width: `${shopeeShare}%` }} />
+                  <div className="bg-[#0086FF]" style={{ width: `${magaluShare}%` }} />
+                </div>
+                <div className="mt-3 flex flex-wrap justify-between gap-2 text-[10px] text-muted-foreground">
+                  <span>AliExpress {queueBySource.aliexpress}</span>
+                  <span>Mercado Livre {queueBySource.mercadolivre}</span>
+                  <span>Shopee {queueBySource.shopee}</span>
+                  <span>Magalu {queueBySource.magalu}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {!filas || filas.length === 0 ? (
         <div className="grid gap-6 lg:grid-cols-[1fr_360px]">

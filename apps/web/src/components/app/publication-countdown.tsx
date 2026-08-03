@@ -29,7 +29,6 @@ export function PublicationCountdown({
 
   useEffect(() => {
     if (targetEpochMs === null) {
-      setRemainingSeconds(0);
       return;
     }
 

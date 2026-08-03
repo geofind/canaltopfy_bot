@@ -9,12 +9,14 @@ import {
   Clock3,
   GripVertical,
   Pencil,
+  RefreshCcw,
   Save,
   Shuffle,
   Trash2,
   X,
 } from "lucide-react";
 import {
+  forceQueueMixAlignment,
   removeQueueItem,
   reorderQueueItems,
   setQueueManualOrder,
@@ -162,6 +164,18 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
     });
   }
 
+  function forceMixAlignment() {
+    setMessage("Enfileirando ajuste do mix…");
+    startTransition(async () => {
+      const result = await forceQueueMixAlignment(queue.id);
+      setMessage(
+        result.error ??
+          "Ajuste enfileirado: ofertas fora da meta serão pausadas e outras capturadas para alinhar o mix em instantes.",
+      );
+      if (!result.error) router.refresh();
+    });
+  }
+
   async function saveText(item: QueueEditorItem, formData: FormData) {
     setMessage("Salvando texto…");
     startTransition(async () => {
@@ -253,9 +267,20 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
             <span className="bg-[#FFE600] transition-[width]" style={{ width: `${mix.mercadolivre}%` }} />
             <span className="bg-[#0086FF] transition-[width]" style={{ width: `${mix.magalu}%` }} />
           </div>
-          <Button type="submit" disabled={isPending || mixTotal !== 100}>
-            <Save className="size-4" /> Salvar distribuição
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="submit" disabled={isPending || mixTotal !== 100}>
+              <Save className="size-4" /> Salvar distribuição
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isPending}
+              onClick={forceMixAlignment}
+              title="Pausa ofertas das fontes acima da meta e captura novas ofertas das fontes abaixo da meta, agora."
+            >
+              <RefreshCcw className="size-4" /> Forçar mix agora
+            </Button>
+          </div>
         </form>
       </section>
 

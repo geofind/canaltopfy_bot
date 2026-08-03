@@ -96,8 +96,10 @@ export default async function IntegracoesPage() {
 
   const heartbeat = heartbeatRows?.[0] ?? null;
   const workerMetadata = (heartbeat?.metadata ?? {}) as WorkerMetadata;
+  // eslint-disable-next-line react-hooks/purity -- Server Component: calculado uma vez por requisição.
+  const agora = Date.now();
   const workerOnline = Boolean(
-    heartbeat && Date.now() - new Date(heartbeat.created_at).getTime() <= 12 * 60_000,
+    heartbeat && agora - new Date(heartbeat.created_at).getTime() <= 12 * 60_000,
   );
   const aliApiConfigurada = workerMetadata.aliexpress_api_configured === true;
   const aliTrackingConfigurado =

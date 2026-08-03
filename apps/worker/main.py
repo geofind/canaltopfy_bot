@@ -21,6 +21,7 @@ except ImportError:
     pass
 
 import db
+import image_cache
 from coupon_discovery import capture_shopee_coupons
 from discovery import capturar_ofertas_mercadolivre
 from pipeline import (import_product, generate_affiliate_link, compute_score,
@@ -275,6 +276,11 @@ def registrar_heartbeat_se_necessario(*, now: Optional[datetime] = None) -> None
         "verified_coupons_only": True,
         "coupon_capture_target_percent": 10,
     }
+    try:
+        metadata["disk_usage"] = image_cache.disk_usage()
+        metadata["image_cache_usage"] = image_cache.usage()
+    except OSError as exc:
+        metadata["disk_usage_error"] = str(exc)[:200]
     db.register_audit(
         organization_id, actor_type="worker", action="worker_heartbeat",
         entity_type="worker", entity_id=str(os.getpid()), metadata=metadata)
@@ -590,6 +596,50 @@ def process_job(job: dict[str, Any]) -> None:
         db.register_audit(org, actor_type="user",
                           action="categoria_redistribuicao_forcada_via_job",
                           entity_type="queue", entity_id=str(queue_id),
+                          metadata=resultado)
+
+    elif tipo == "queue.force_align_mix":
+        queue_id = payload.get("queue_id")
+        if not org or not queue_id:
+            raise ValueError(
+                "job queue.force_align_mix precisa de organization_id e queue_id")
+        termos = _termos_com_banco(org, "aliexpress", list(REPLENISHER_TERMS))
+        termos = _termos_com_banco(org, "shopee", termos)
+        termos = _termos_com_banco(org, "magalu", termos)
+        config = ReplenisherConfig(
+            organization_id=org,
+            queue_id=queue_id,
+            terms=tuple(termos),
+            min_items=REPLENISHER_MIN_ITEMS,
+            target_items=REPLENISHER_TARGET_ITEMS,
+            # Ajuste maior que o ciclo automático (4): é um pedido explícito
+            # do usuário pra corrigir o mix agora, não a manutenção de rotina.
+            max_new_per_cycle=max(REPLENISHER_MAX_NEW_PER_CYCLE, 20),
+            min_score=REPLENISHER_MIN_SCORE,
+            interval_minutes=REPLENISHER_INTERVAL_MINUTES,
+            ml_target_percent=REPLENISHER_ML_TARGET_PERCENT,
+            shopee_target_percent=REPLENISHER_SHOPEE_TARGET_PERCENT,
+            aliexpress_target_percent=REPLENISHER_ALIEXPRESS_TARGET_PERCENT,
+            magalu_target_percent=REPLENISHER_MAGALU_TARGET_PERCENT,
+            enforce_source_mix=True,
+            hermes_url=HERMES_LINK_AGENT_URL,
+            hermes_token=HERMES_LINK_AGENT_TOKEN,
+        )
+        resultado = replenish_once(config)
+        db.register_audit(org, actor_type="user",
+                          action="mix_fontes_forcado_via_job",
+                          entity_type="queue", entity_id=str(queue_id),
+                          metadata=resultado)
+
+    elif tipo == "cache.cleanup":
+        # Ação manual (botão em /sistema) — nunca chamada por um
+        # agendador; hoje o cache local costuma estar vazio (nada grava
+        # imagem em disco ainda), mas a rotina já fica pronta pra quando
+        # alguma etapa passar a persistir localmente.
+        resultado = image_cache.cleanup_all()
+        db.register_audit(org, actor_type="user",
+                          action="cache_local_limpo_via_job",
+                          entity_type="worker", entity_id=str(os.getpid()),
                           metadata=resultado)
 
     else:

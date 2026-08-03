@@ -450,5 +450,72 @@ class ReabastecedorMesclaPalavrasChaveTests(unittest.TestCase):
         thread_instance.start.assert_called_once()
 
 
+class ProcessJobForceAlignMixTests(unittest.TestCase):
+    """Botão "Forçar mix agora" em /filas: enfileira um job que roda um
+    ciclo do reabastecedor com ajuste maior, pra convergir a fila pra
+    distribuição configurada sem esperar o ciclo automático de 5 min."""
+
+    def test_monta_config_da_fila_e_chama_replenish_once(self):
+        job = {
+            "organization_id": "org-1",
+            "type": "queue.force_align_mix",
+            "payload": {"queue_id": "queue-9"},
+        }
+        with mock.patch.multiple(
+                worker_main,
+                REPLENISHER_TERMS=("smartphone",),
+                REPLENISHER_MIN_ITEMS=84,
+                REPLENISHER_TARGET_ITEMS=96,
+                REPLENISHER_MAX_NEW_PER_CYCLE=4,
+                REPLENISHER_MIN_SCORE=35.0,
+                REPLENISHER_INTERVAL_MINUTES=5,
+                REPLENISHER_ML_TARGET_PERCENT=30,
+                REPLENISHER_SHOPEE_TARGET_PERCENT=50,
+                REPLENISHER_ALIEXPRESS_TARGET_PERCENT=20,
+                REPLENISHER_MAGALU_TARGET_PERCENT=0,
+                HERMES_LINK_AGENT_URL=None,
+                HERMES_LINK_AGENT_TOKEN=None), \
+             mock.patch.object(
+                 worker_main, "_termos_com_banco",
+                 side_effect=lambda org, fonte, termos: [*termos, fonte]), \
+             mock.patch.object(worker_main, "replenish_once",
+                               return_value={"triggered": True}) as replenish, \
+             mock.patch.object(worker_main.db, "register_audit") as audit:
+            worker_main.process_job(job)
+
+        config_passada = replenish.call_args.args[0]
+        self.assertEqual(config_passada.organization_id, "org-1")
+        self.assertEqual(config_passada.queue_id, "queue-9")
+        self.assertEqual(
+            config_passada.terms, ("smartphone", "aliexpress", "shopee", "magalu"))
+        self.assertEqual(config_passada.max_new_per_cycle, 20)
+        self.assertTrue(config_passada.enforce_source_mix)
+        audit.assert_called_once()
+        self.assertEqual(
+            audit.call_args.kwargs["action"], "mix_fontes_forcado_via_job")
+
+    def test_exige_queue_id(self):
+        job = {"organization_id": "org-1", "type": "queue.force_align_mix", "payload": {}}
+        with self.assertRaises(ValueError):
+            worker_main.process_job(job)
+
+
+class ProcessJobCacheCleanupTests(unittest.TestCase):
+    """Botão "Limpar cache" em /sistema — ação manual, sem agendador."""
+
+    def test_cache_cleanup_chama_image_cache_e_registra_auditoria(self):
+        job = {"organization_id": "org-1", "type": "cache.cleanup", "payload": {}}
+        with mock.patch.object(worker_main.image_cache, "cleanup_all",
+                               return_value={"removed": 3, "freed_bytes": 999}) as cleanup, \
+             mock.patch.object(worker_main.db, "register_audit") as audit:
+            worker_main.process_job(job)
+
+        cleanup.assert_called_once_with()
+        audit.assert_called_once()
+        self.assertEqual(audit.call_args.kwargs["action"], "cache_local_limpo_via_job")
+        self.assertEqual(audit.call_args.kwargs["metadata"],
+                         {"removed": 3, "freed_bytes": 999})
+
+
 if __name__ == "__main__":
     unittest.main()

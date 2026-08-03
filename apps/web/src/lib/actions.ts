@@ -670,6 +670,24 @@ export async function updateQueueSourceMix(
   return { ok: true };
 }
 
+export async function forceQueueMixAlignment(
+  queueId: string,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const { error } = await supabase.from("jobs").insert({
+    organization_id: organizationId,
+    type: "queue.force_align_mix",
+    payload: { queue_id: queueId },
+  });
+  if (error) return { error: "Não foi possível enfileirar o ajuste do mix." };
+
+  revalidatePath("/filas");
+  return { ok: true };
+}
+
 export async function reorderQueueItems(
   queueId: string,
   orderedIds: string[],

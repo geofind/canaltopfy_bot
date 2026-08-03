@@ -5,10 +5,6 @@ import {
   BadgeCheck,
   Boxes,
   Clock3,
-  Layers3,
-  Radar,
-  Search,
-  ShieldCheck,
   TicketCheck,
   Zap,
 } from "lucide-react";
@@ -56,12 +52,6 @@ function numberValue(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function stringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
-}
-
 function formatDuration(hours: number) {
   const safeMinutes = Math.max(0, Math.round(hours * 60));
   const h = Math.floor(safeMinutes / 60);
@@ -102,15 +92,11 @@ function sourceLabel(source: string | null | undefined) {
   return "AliExpress";
 }
 
-function sourceColor(source: string | null | undefined) {
-  if (source === "mercadolivre") return "bg-[#FFE600]";
-  if (source === "shopee") return "bg-[#EE4D2D]";
-  return "bg-[#E52B37]";
-}
-
 export default async function DashboardPage() {
   const supabase = await createClient();
-  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  // eslint-disable-next-line react-hooks/purity -- Server Component: calculado uma vez por requisição, não em render de cliente.
+  const agora = Date.now();
+  const oneDayAgo = new Date(agora - 24 * 60 * 60 * 1000).toISOString();
 
   const [
     { data: heartbeatRows },
@@ -174,7 +160,7 @@ export default async function DashboardPage() {
   const heartbeat = heartbeatRows?.[0] ?? null;
   const config = (heartbeat?.metadata ?? {}) as JsonRecord;
   const heartbeatAge = heartbeat
-    ? Date.now() - new Date(heartbeat.created_at).getTime()
+    ? agora - new Date(heartbeat.created_at).getTime()
     : Number.POSITIVE_INFINITY;
   const workerOnline = heartbeatAge <= 12 * 60 * 1000;
 
@@ -186,29 +172,8 @@ export default async function DashboardPage() {
   );
   const lastScheduled = queueItems.at(-1)?.scheduled_at;
   const reserveHours = lastScheduled
-    ? Math.max(0, (new Date(lastScheduled).getTime() - Date.now()) / 3_600_000)
+    ? Math.max(0, (new Date(lastScheduled).getTime() - agora) / 3_600_000)
     : (queueItems.length * intervalMinutes) / 60;
-
-  const queueBySource = queueItems.reduce(
-    (acc, item) => {
-      const product = one(one(item.campaign)?.product);
-      const source = product?.source_name === "mercadolivre"
-        ? "mercadolivre"
-        : product?.source_name === "shopee" ? "shopee" : "aliexpress";
-      acc[source] += 1;
-      return acc;
-    },
-    { aliexpress: 0, mercadolivre: 0, shopee: 0 },
-  );
-  const aliShare = queueItems.length
-    ? (queueBySource.aliexpress / queueItems.length) * 100
-    : 0;
-  const mlShare = queueItems.length
-    ? (queueBySource.mercadolivre / queueItems.length) * 100
-    : 0;
-  const shopeeShare = queueItems.length
-    ? (queueBySource.shopee / queueItems.length) * 100
-    : 0;
 
   const recentOffers = campaigns
     .map((campaign) => ({ campaign, product: one(campaign.product) }))
@@ -222,16 +187,7 @@ export default async function DashboardPage() {
     )
     .slice(0, 5);
 
-  const searchTerms = stringList(config.search_terms);
-  const mlTerms = stringList(config.ml_search_terms);
-  const mlCategories = stringList(config.ml_categories);
-  const searchTermCount = numberValue(config.search_terms_count, searchTerms.length);
-  const mlTermCount = numberValue(config.ml_search_terms_count, mlTerms.length);
-  const mlCategoryCount = numberValue(config.ml_categories_count, mlCategories.length);
-  const termsPerCycle = numberValue(config.ml_terms_per_cycle, 0);
-  const categoriesPerCycle = numberValue(config.ml_categories_per_cycle, 0);
   const cycleMinutes = numberValue(config.ml_cycle_minutes, intervalMinutes);
-  const minScore = numberValue(config.min_score, 0);
   const completedJobs = (jobRows ?? []).filter((job) => job.status === "done").length;
   const failedJobs = (jobRows ?? []).filter((job) => job.status === "failed").length;
   const nextQueueItem = queueItems[0] ?? null;
@@ -241,7 +197,7 @@ export default async function DashboardPage() {
     ? new Date(nextQueueItem.scheduled_at).getTime()
     : null;
   const initialRemainingSeconds = nextPublicationEpochMs
-    ? Math.max(0, Math.ceil((nextPublicationEpochMs - Date.now()) / 1_000))
+    ? Math.max(0, Math.ceil((nextPublicationEpochMs - agora) / 1_000))
     : 0;
   const nextCampaignFlow =
     nextQueueItem && nextCampaign?.id && nextProduct?.title
@@ -250,7 +206,7 @@ export default async function DashboardPage() {
           title: nextProduct.title,
           source: sourceLabel(nextProduct.source_name),
           scheduledTime: formatTime(nextQueueItem.scheduled_at),
-          isDue: new Date(nextQueueItem.scheduled_at).getTime() <= Date.now(),
+          isDue: new Date(nextQueueItem.scheduled_at).getTime() <= agora,
           priceLabel: formatMoney(nextProduct.discounted_price_brl),
           score: Math.round(numberValue(nextProduct.score)),
           discount: numberValue(nextProduct.discount_pct),
@@ -258,8 +214,6 @@ export default async function DashboardPage() {
       : null;
 
   const overviewNav = [
-    ["#captacao", "Captação"],
-    ["#fila", "Fila"],
     ["#achados", "Achados"],
     ["#atividade", "Atividade"],
   ] as const;
@@ -380,150 +334,6 @@ export default async function DashboardPage() {
           <Link href="/sistema" className="font-bold text-white hover:text-[#F65A6C]">
             Abrir diagnóstico <ArrowUpRight className="ml-1 inline size-3" />
           </Link>
-        </div>
-      </section>
-
-      <section id="captacao" className="scroll-mt-24 space-y-4">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <p className="eyebrow">Captação ampliada</p>
-            <h2 className="mt-1 text-xl font-bold">Onde o motor está procurando</h2>
-          </div>
-          <Link href="/sugestoes" className="text-xs font-bold text-primary hover:underline">
-            Ver sugestões encontradas →
-          </Link>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <details className="group rounded-xl border bg-white p-5 shadow-soft-sm open:ring-2 open:ring-primary/15">
-            <summary className="cursor-pointer list-none">
-              <Search className="size-5 text-primary" aria-hidden="true" />
-              <strong className="mt-5 block font-display text-4xl">{searchTermCount}</strong>
-              <span className="mt-1 block text-sm font-bold">termos no AliExpress</span>
-              <span className="mt-3 block text-xs leading-5 text-muted-foreground">
-                Embaralhados antes de cada reposição. Clique para navegar pelos termos.
-              </span>
-            </summary>
-            <div className="mt-4 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto border-t pt-4">
-              {searchTerms.map((term) => (
-                <span key={term} className="rounded-full bg-muted px-2.5 py-1 text-[10px] font-semibold">
-                  {term}
-                </span>
-              ))}
-            </div>
-          </details>
-
-          <details className="group rounded-xl border bg-white p-5 shadow-soft-sm open:ring-2 open:ring-primary/15">
-            <summary className="cursor-pointer list-none">
-              <Layers3 className="size-5 text-primary" aria-hidden="true" />
-              <strong className="mt-5 block font-display text-4xl">{mlCategoryCount}</strong>
-              <span className="mt-1 block text-sm font-bold">categorias Mercado Livre</span>
-              <span className="mt-3 block text-xs leading-5 text-muted-foreground">
-                Rotação de {categoriesPerCycle} categorias oficiais por rodada.
-              </span>
-            </summary>
-            <div className="mt-4 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto border-t pt-4">
-              {mlCategories.map((category) => (
-                <span key={category} className="rounded-full bg-[#FFF7B8] px-2.5 py-1 font-mono text-[10px] font-bold text-[#6B5B00]">
-                  {category}
-                </span>
-              ))}
-            </div>
-          </details>
-
-          <details className="group rounded-xl border bg-white p-5 shadow-soft-sm open:ring-2 open:ring-primary/15">
-            <summary className="cursor-pointer list-none">
-              <Radar className="size-5 text-primary" aria-hidden="true" />
-              <strong className="mt-5 block font-display text-4xl">{termsPerCycle}</strong>
-              <span className="mt-1 block text-sm font-bold">termos por ciclo</span>
-              <span className="mt-3 block text-xs leading-5 text-muted-foreground">
-                {mlTermCount} termos do Mercado Livre alternados a cada {cycleMinutes} minutos.
-              </span>
-            </summary>
-            <div className="mt-4 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto border-t pt-4">
-              {mlTerms.map((term) => (
-                <span key={term} className="rounded-full bg-muted px-2.5 py-1 text-[10px] font-semibold">
-                  {term}
-                </span>
-              ))}
-            </div>
-          </details>
-
-          <div className="rounded-xl border bg-[#FFF7F8] p-5 shadow-soft-sm">
-            <ShieldCheck className="size-5 text-primary" aria-hidden="true" />
-            <strong className="mt-5 block font-display text-4xl">{minScore}+</strong>
-            <span className="mt-1 block text-sm font-bold">Topfy Score mínimo</span>
-            <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
-              <li>✓ desconto calculado com preços reais</li>
-              <li>✓ produto e link deduplicados</li>
-              <li>✓ categorias consecutivas bloqueadas</li>
-              <li>✓ cupom somente com código ativo</li>
-            </ul>
-          </div>
-        </div>
-      </section>
-
-      <section id="fila" className="scroll-mt-24 space-y-4">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <p className="eyebrow">Fila navegável</p>
-            <h2 className="mt-1 text-xl font-bold">Próximas ofertas no trilho</h2>
-          </div>
-          <Link href="/filas" className="text-xs font-bold text-primary hover:underline">
-            Gerenciar fila →
-          </Link>
-        </div>
-
-        <div className="rounded-2xl border bg-white p-5 shadow-soft-sm sm:p-7">
-          <div className="grid gap-7 lg:grid-cols-[1fr_280px]">
-            <div className="min-w-0">
-              <div className="flex h-14 items-center gap-2 overflow-x-auto rounded-xl bg-[#F0F2F5] px-4">
-                <span className="mr-1 shrink-0 text-[9px] font-black uppercase tracking-[.18em] text-muted-foreground">
-                  agora
-                </span>
-                <div className="h-px min-w-4 flex-1 bg-[#CBD0D8]" />
-                {queueItems.slice(0, 24).map((item, index) => {
-                  const campaign = one(item.campaign);
-                  const product = one(campaign?.product);
-                  return (
-                    <Link
-                      key={item.id}
-                      href={campaign?.id ? `/campanhas/${campaign.id}` : "/filas"}
-                      title={`${index + 1}. ${product?.title ?? "Oferta"} — ${new Date(item.scheduled_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`}
-                      className={`grid size-4 shrink-0 place-items-center rounded-full ring-4 ring-white transition-transform hover:scale-150 focus-visible:scale-150 ${sourceColor(product?.source_name)}`}
-                      aria-label={`Abrir próxima oferta ${index + 1}: ${product?.title ?? "sem título"}`}
-                    >
-                      <span className="size-1 rounded-full bg-black/20" />
-                    </Link>
-                  );
-                })}
-                <div className="h-px min-w-4 flex-1 bg-[#CBD0D8]" />
-                <span className="shrink-0 text-[9px] font-black uppercase tracking-[.18em] text-muted-foreground">
-                  +{formatDuration(reserveHours)}
-                </span>
-              </div>
-              <p className="mt-3 text-xs text-muted-foreground">
-                Passe o cursor sobre um ponto ou use Tab para ver e abrir a oferta. A sequência já incorpora score, fonte e diversidade de categoria.
-              </p>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between text-xs font-bold">
-                <span>Mix das fontes</span>
-                <span>{queueItems.length} itens</span>
-              </div>
-              <div className="mt-3 flex h-3 overflow-hidden rounded-full bg-muted">
-                <div className="bg-[#E52B37]" style={{ width: `${aliShare}%` }} />
-                <div className="bg-[#FFE600]" style={{ width: `${mlShare}%` }} />
-                <div className="bg-[#EE4D2D]" style={{ width: `${shopeeShare}%` }} />
-              </div>
-              <div className="mt-3 flex flex-wrap justify-between gap-2 text-[10px] text-muted-foreground">
-                <span>AliExpress {queueBySource.aliexpress}</span>
-                <span>Mercado Livre {queueBySource.mercadolivre}</span>
-                <span>Shopee {queueBySource.shopee}</span>
-              </div>
-            </div>
-          </div>
         </div>
       </section>
 
