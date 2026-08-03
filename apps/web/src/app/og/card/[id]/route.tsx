@@ -56,8 +56,13 @@ async function loadFonts(): Promise<Font[]> {
 
 async function fetchImageAsDataUrl(url: string): Promise<string | null> {
   try {
+    // Sem "image/webp" no Accept de propósito: o Satori (motor do
+    // ImageResponse) não decodifica webp (crasha com "u2 is not
+    // iterable") — CDNs de imagem (AliExpress inclusive) servem webp só
+    // quando o cliente diz que aceita; omitir faz cair pra jpeg/png,
+    // que o Satori decodifica sem problema.
     const res = await fetch(url, {
-      headers: { accept: "image/jpeg,image/png,image/webp;q=0.9" },
+      headers: { accept: "image/jpeg,image/png" },
       signal: AbortSignal.timeout(6000),
     });
     if (!res.ok) return null;
@@ -116,11 +121,16 @@ export async function GET(
   const cardConfig = produto?.card_config ?? {};
   const tema = CARD_THEMES[cardConfig.theme ?? "navy"] ?? CARD_THEMES.navy;
 
-  const titulo = produto?.title ?? campanha.title ?? "Oferta em destaque";
-  const tituloLinhas = Math.min(
-    2,
-    Math.max(1, Math.ceil((titulo.length * 44) / 800)),
-  );
+  // Satori (motor do ImageResponse) não suporta -webkit-line-clamp, então
+  // truncar por CSS não funciona — corta o texto direto em N caracteres
+  // (título de produto real costuma ser bem mais longo que isso e sem
+  // corte estourava o card, sobrepondo a imagem/preço abaixo).
+  const TITULO_MAX_CHARS = 70;
+  const tituloCompleto = produto?.title ?? campanha.title ?? "Oferta em destaque";
+  const titulo =
+    tituloCompleto.length > TITULO_MAX_CHARS
+      ? `${tituloCompleto.slice(0, TITULO_MAX_CHARS).trimEnd()}…`
+      : tituloCompleto;
 
   // Imagem real do produto: usa a gravada no produto ou a passada na hora
   // do post (worker captura og:image da página da loja — sem banco de
@@ -150,7 +160,7 @@ export async function GET(
           height: "100%",
           display: "flex",
           flexDirection: "column",
-          padding: cardConfig.border ? 14 : 64,
+          padding: cardConfig.border ? 14 : 48,
           color: "#F8FAFC",
           fontFamily: "Inter",
         }}
@@ -161,7 +171,7 @@ export async function GET(
             height: "100%",
             display: "flex",
             flexDirection: "column",
-            padding: cardConfig.border ? 50 : 64,
+            padding: cardConfig.border ? 50 : 48,
             background: tema.gradient,
             borderRadius: cardConfig.border ? 28 : 0,
             backgroundImage: tema.gradient,
@@ -217,8 +227,8 @@ export async function GET(
           flex: 1,
           alignItems: "center",
           justifyContent: "center",
-          paddingTop: 36,
-          paddingBottom: 36,
+          paddingTop: 20,
+          paddingBottom: 20,
         }}
       >
         {imagemReal ? (
@@ -226,10 +236,10 @@ export async function GET(
           <img
             src={imagemReal}
             alt={titulo}
-            width={500}
-            height={500}
+            width={340}
+            height={340}
             style={{
-              borderRadius: 40,
+              borderRadius: 32,
               border: "1px solid rgba(148, 163, 184, 0.25)",
               objectFit: "cover",
             }}
@@ -237,9 +247,9 @@ export async function GET(
         ) : (
           <div
             style={{
-              width: 500,
-              height: 500,
-              borderRadius: 40,
+              width: 340,
+              height: 340,
+              borderRadius: 32,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -249,11 +259,11 @@ export async function GET(
           >
             <span
               style={{
-                fontSize: 40,
+                fontSize: 28,
                 fontWeight: 700,
                 color: "#475569",
                 textAlign: "center",
-                padding: 40,
+                padding: 28,
               }}
             >
               {titulo}
@@ -267,7 +277,9 @@ export async function GET(
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          minHeight: 96 + (tituloLinhas - 1) * 52,
+          // título truncado em TITULO_MAX_CHARS cabe em até ~2 linhas;
+          // altura fixa generosa evita variação empurrar o resto do card.
+          minHeight: 130,
         }}
       >
         <span
@@ -290,7 +302,7 @@ export async function GET(
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "center",
-          marginTop: 24,
+          marginTop: 12,
         }}
       >
         {produto?.original_price_brl != null && (
@@ -326,12 +338,12 @@ export async function GET(
         style={{
           display: "flex",
           justifyContent: "center",
-          marginTop: 12,
+          marginTop: 6,
         }}
       >
         <span
           style={{
-            fontSize: hasPrice ? 76 : 48,
+            fontSize: hasPrice ? 64 : 40,
             fontWeight: 700,
             color: "#F8FAFC",
           }}
@@ -348,15 +360,15 @@ export async function GET(
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "space-between",
-          marginTop: 44,
+          marginTop: 20,
           borderTop: "1px solid rgba(148, 163, 184, 0.18)",
-          paddingTop: 28,
+          paddingTop: 20,
         }}
       >
-        <span style={{ fontSize: 22, fontWeight: 400, color: "#64748B" }}>
+        <span style={{ fontSize: 20, fontWeight: 400, color: "#64748B" }}>
           {pageUrl}
         </span>
-        <span style={{ fontSize: 22, fontWeight: 400, color: "#64748B" }}>
+        <span style={{ fontSize: 20, fontWeight: 400, color: "#64748B" }}>
           comissão sem custo extra
         </span>
       </div>
