@@ -14,6 +14,7 @@ out/
 __pycache__/
 *.pyc
 *.db
+apps/worker/worker.log
 
 # Banco de dados local (fora do Supabase)
 db/*.db
@@ -30,3 +31,6 @@ Thumbs.db
 # Deploy
 .vercel
 .wrangler/
+
+# Logs locais de dev
+apps/web/dev.log

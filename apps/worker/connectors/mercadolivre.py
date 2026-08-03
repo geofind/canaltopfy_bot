@@ -1,10 +1,19 @@
 """Topfy Affiliate OS — conector Mercado Livre (importação manual).
 
 Automação de compra é proibida pela plataforma; este conector só LÊ dados
-públicos de anúncios via API oficial (api.mercadolibre.com, GET /items —
-sem autenticação) para o fluxo de importação manual de URL. O OAuth do app
-(credenciais em ml_credentials) é para dados da conta do usuário, não para
-leitura de anúncio.
+públicos de anúncios via API oficial (api.mercadolibre.com, GET /items) para
+o fluxo de importação manual de URL.
+
+Autenticação best-effort: a API pública tem devolvido 403 PolicyAgent
+("PA_UNAUTHORIZED_RESULT_FROM_POLICIES") pra chamadas anônimas — a própria
+documentação oficial do ML mostra GET /items com `Authorization: Bearer
+$ACCESS_TOKEN`. Por isso o conector aceita um access_token opcional (vindo
+do OAuth já conectado em ml_credentials, reaproveitado aqui — antes só era
+usado pra dados da conta) e manda como Bearer quando disponível. Sem token
+(ninguém conectou, ou expirou), cai no mesmo caminho anônimo de sempre — sem
+regressão. Não é garantia de resolver o 403 (não investigado a fundo), e o
+token deste app expira em ~6h sem refresh confiável (reconectar em
+/integracoes quando vencer).
 
 Link de afiliado: o programa "Mercado Livre Afiliados" não tem API pública
 de geração — o usuário cola o link gerado no painel oficial; por isso
@@ -29,53 +38,27 @@ API_BASE = "https://api.mercadolibre.com"
 # 3.14 (3.14.6) tem regressão que quebra literal + classe + classe
 # (ex: ML[A-Z][A-Z] não casa "MLB"). Alternância explícita funciona.
 ITEM_ID_RE = re.compile(r"\bML(?:B|A|C|M|U|T|V|P|EC|CO)-?(\d{7,15})\b")
-# meli.la: encurtador oficial do ML (link de "compartilhar" do app) — o ID
-# do anúncio só aparece na URL final, depois do redirect.
+# meli.la: encurtador oficial do Mercado Livre (link de "compartilhar" do
+# app) — o ID do anúncio só aparece na URL final, depois do redirect.
+from ._shortlink import resolve_shortlink
+
 SHORTLINK_HOSTS = ("meli.la",)
-REDIRECT_MAX = 5
-REDIRECT_TIMEOUT = 12
-
-
-class _RedirectCapturado(Exception):
-    def __init__(self, url: str) -> None:
-        super().__init__(url)
-        self.url = url
-
-
-class _NoAutoRedirect(urllib.request.HTTPRedirectHandler):
-    """Captura o Location do redirect sem seguir automaticamente — o
-    chamador decide a próxima URL (loop com limite)."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl) -> Any:
-        raise _RedirectCapturado(newurl)
 
 
 def _resolve_shortlink(url: str) -> Optional[str]:
-    """Segue o redirect do meli.la só pelos cabeçalhos Location (nunca
-    baixa o body). Best-effort: falha -> None (cai no erro de ID não
-    encontrado, que já orienta o usuário a colar o link do anúncio)."""
-    atual = url
-    for _ in range(REDIRECT_MAX):
-        try:
-            opener = urllib.request.build_opener(_NoAutoRedirect())
-            req = urllib.request.Request(
-                atual, headers={"User-Agent": "TopfyAffiliateOS/0.1",
-                                "Accept": "text/html,*/*"})
-            with opener.open(req, timeout=REDIRECT_TIMEOUT) as resp:
-                return resp.geturl()
-        except _RedirectCapturado as r:
-            atual = r.url
-            continue
-        except (urllib.error.URLError, urllib.error.HTTPError,
-                OSError, ValueError):
-            return None
-    return None
+    """Segue o redirect do link curto e devolve a URL final do anúncio.
+    Best-effort: falha -> None (cai no erro de ID não encontrado, que já
+    orienta o usuário a colar o link do anúncio)."""
+    return resolve_shortlink(url)
 
 
-def _get_json(url: str, timeout: int = 10) -> Any:
-    req = urllib.request.Request(url, method="GET",
-                                 headers={"Accept": "application/json",
-                                          "User-Agent": "TopfyAffiliateOS/0.1"})
+def _get_json(url: str, timeout: int = 10,
+              access_token: Optional[str] = None) -> Any:
+    headers = {"Accept": "application/json",
+               "User-Agent": "TopfyAffiliateOS/0.1"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    req = urllib.request.Request(url, method="GET", headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -99,13 +82,15 @@ def _para_int(valor: Any) -> Optional[int]:
     return int(numero) if numero is not None else None
 
 
-def _resolver_categoria(category_id: Optional[str]) -> Optional[str]:
+def _resolver_categoria(category_id: Optional[str],
+                        access_token: Optional[str] = None) -> Optional[str]:
     """Nome legível da categoria via /categories/{id} (path_from_root).
     Nunca quebra a importação se a chamada falhar."""
     if not category_id:
         return None
     try:
-        bruto = _get_json(f"{API_BASE}/categories/{category_id}")
+        bruto = _get_json(f"{API_BASE}/categories/{category_id}",
+                          access_token=access_token)
     except (urllib.error.URLError, json.JSONDecodeError, ValueError):
         return None
     if not isinstance(bruto, dict):
@@ -154,6 +139,9 @@ def _parse_produto_api(bruto: dict[str, Any]) -> dict[str, Any]:
 class MercadoLivreConnector(MarketplaceConnector):
     code = "mercadolivre"
 
+    def __init__(self, access_token: Optional[str] = None) -> None:
+        self.access_token = access_token
+
     def detect_url(self, url: str) -> bool:
         host = urllib.parse.urlparse(url).netloc.lower()
         return ("mercadolivre." in host or "mercadolibre." in host
@@ -164,6 +152,20 @@ class MercadoLivreConnector(MarketplaceConnector):
         return urllib.parse.urlunparse(parsed._replace(query="", fragment=""))
 
     def _external_id(self, url: str) -> Optional[str]:
+        """Prioriza o ID do ANÚNCIO sobre o ID de CATÁLOGO: páginas
+        .../p/MLB<id> agregam ofertas de vários vendedores pro mesmo
+        produto — o item_id/wid (em query ou fragment) identifica a
+        oferta específica, que é o que a API /items/ espera. Sem esses
+        parâmetros (ex.: permalink direto produto.mercadolivre.com.br/
+        MLB-<id>-slug), cai no scan simples da URL inteira."""
+        parsed = urllib.parse.urlparse(url)
+        for bruto in (parsed.query, parsed.fragment):
+            params = urllib.parse.parse_qs(bruto)
+            for chave in ("wid", "item_id", "pdp_filters"):
+                for valor in params.get(chave, []):
+                    match = ITEM_ID_RE.search(valor)
+                    if match:
+                        return match.group(0).replace("-", "")
         match = ITEM_ID_RE.search(url)
         return match.group(0).replace("-", "") if match else None
 
@@ -190,7 +192,8 @@ class MercadoLivreConnector(MarketplaceConnector):
                 "produto.")
 
         try:
-            bruto = _get_json(f"{API_BASE}/items/{external_id}")
+            bruto = _get_json(f"{API_BASE}/items/{external_id}",
+                              access_token=self.access_token)
         except urllib.error.HTTPError as exc:
             return {
                 "external_product_id": external_id,
@@ -216,11 +219,13 @@ class MercadoLivreConnector(MarketplaceConnector):
 
         campos = _parse_produto_api(bruto)
         campos["canonical_url"] = canonical
-        campos["category"] = _resolver_categoria(bruto.get("category_id"))
+        campos["category"] = _resolver_categoria(
+            bruto.get("category_id"), access_token=self.access_token)
 
         if not campos["seller_name"] and campos["seller_id"]:
             try:
-                user = _get_json(f"{API_BASE}/users/{campos['seller_id']}")
+                user = _get_json(f"{API_BASE}/users/{campos['seller_id']}",
+                                 access_token=self.access_token)
                 if isinstance(user, dict) and user.get("nickname"):
                     campos["seller_name"] = user["nickname"]
             except urllib.error.URLError:
@@ -231,6 +236,64 @@ class MercadoLivreConnector(MarketplaceConnector):
                 f"Anúncio em {campos['currency']} — a API pública do Mercado "
                 f"Livre não converte moeda; preço abaixo é o preço local.")
         return campos
+
+    def search_offers(self, query: str) -> list[dict[str, Any]]:
+        """Descobre anúncios brasileiros pela API oficial de busca.
+
+        A busca exige o token OAuth da organização porque chamadas anônimas
+        têm sido recusadas pela API. Ela devolve apenas URLs de produtos
+        específicos; não acessa o Portal de Afiliados, não faz scraping e
+        não tenta fabricar link comissionado.
+        """
+        termo = query.strip()
+        if not termo:
+            return []
+        if not self.access_token:
+            raise CredencialNaoConfigurada(
+                "mercadolivre: conecte novamente sua conta em /integracoes "
+                "para descobrir ofertas pela API oficial")
+
+        params = urllib.parse.urlencode({
+            "q": termo,
+            "sort": "sold_quantity_desc",
+            "limit": 50,
+        })
+        try:
+            bruto = _get_json(
+                f"{API_BASE}/sites/MLB/search?{params}",
+                access_token=self.access_token,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                raise CredencialNaoConfigurada(
+                    "mercadolivre: token sem acesso à busca ou expirado; "
+                    "reconecte a conta em /integracoes") from exc
+            raise RuntimeError(
+                f"Mercado Livre recusou a busca de ofertas (HTTP {exc.code})"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"Mercado Livre API inacessível durante a busca: {exc}"
+            ) from exc
+
+        resultados = bruto.get("results") if isinstance(bruto, dict) else None
+        if not isinstance(resultados, list):
+            return []
+
+        ofertas: list[dict[str, Any]] = []
+        vistos: set[str] = set()
+        for item in resultados:
+            if not isinstance(item, dict):
+                continue
+            produto = _parse_produto_api(item)
+            external_id = produto.get("external_product_id")
+            permalink = produto.get("canonical_url")
+            if (not external_id or not permalink or external_id in vistos or
+                    produto.get("currency") != "BRL"):
+                continue
+            vistos.add(external_id)
+            ofertas.append(produto)
+        return ofertas
 
     def generate_affiliate_link(self, product_url: str) -> dict[str, Any]:
         raise CredencialNaoConfigurada(
@@ -250,7 +313,8 @@ class MercadoLivreConnector(MarketplaceConnector):
 
     def health_check(self) -> dict[str, Any]:
         try:
-            bruto = _get_json(f"{API_BASE}/items/MLB1")
+            bruto = _get_json(f"{API_BASE}/items/MLB1",
+                              access_token=self.access_token)
         except Exception as exc:
             return {
                 "connector_type": "API",

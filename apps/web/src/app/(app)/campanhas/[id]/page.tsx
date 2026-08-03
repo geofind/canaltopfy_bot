@@ -7,6 +7,7 @@ import {
   RegenerateButton,
   CardConfigForm,
   CopyTextButton,
+  MercadoLivreAutomationForm,
 } from "@/components/app/campaign-actions";
 import {
   Card,
@@ -262,6 +263,24 @@ export default async function CampaignDetailPage({
           </CardContent>
         </Card>
       </div>
+
+      {produto?.source_name === "mercadolivre" && !produto?.affiliate_link && (
+        <Card className="border-emerald-500/30">
+          <CardHeader>
+            <CardTitle>Agente Mercado Livre → Telegram</CardTitle>
+            <CardDescription>
+              Cole o link que o Hermes acabou de criar. A imagem, a copy,
+              a aprovação e a publicação seguem automaticamente.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <MercadoLivreAutomationForm
+              campaignId={campanha.id}
+              filas={(filas ?? []).map((f) => ({ id: f.id, name: f.name }))}
+            />
+          </CardContent>
+        </Card>
+      )}
 
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-3">

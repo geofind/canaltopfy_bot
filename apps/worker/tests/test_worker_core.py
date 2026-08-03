@@ -25,7 +25,8 @@ for chave in ("ALIEXPRESS_APP_KEY", "ALIEXPRESS_APP_SECRET",
     os.environ.pop(chave, None)
 
 from scoring import PESO_MAXIMO, calcular_score  # noqa: E402
-from content import gerar_copy, validar_copy, FRASES_PROIBIDAS  # noqa: E402
+from content import (gerar_copy, validar_copy, FRASES_PROIBIDAS,  # noqa: E402
+                     escolher_imagem_limpa)
 from adapters import (AmazonAdapter, WhatsAppAdapter, TikTokAdapter,  # noqa: E402
                       InstagramAdapter, YouTubeAdapter)
 from connectors.aliexpress import AliExpressConnector  # noqa: E402
@@ -84,7 +85,7 @@ class ContentTests(unittest.TestCase):
         for seed in range(10):
             copy = gerar_copy(PRODUTO_VERIFIED, "oferta-padrao",
                               provider="fallback", seed=seed)
-            self.assertIn("49.90", copy["body"] or "")
+            self.assertIn("49,90", copy["body"] or "")  # formato BR: vírgula decimal
             self.assertIn(PRODUTO_VERIFIED["title"], copy["headline"])
 
     def test_produto_sem_preco_nunca_mostra_numero(self):
@@ -116,6 +117,81 @@ class ContentTests(unittest.TestCase):
     def test_openrouter_ausente_cai_no_fallback_com_provider_auto(self):
         copy = gerar_copy(PRODUTO_VERIFIED, "oferta-padrao", provider="auto", seed=7)
         self.assertEqual(copy["provider"], "fallback")
+
+    def test_cupom_real_aparece_na_copy(self):
+        produto = dict(PRODUTO_VERIFIED, coupons=[{"code": "OFERTAMELI15"}])
+        copy = gerar_copy(produto, "oferta-padrao", provider="fallback", seed=1)
+        self.assertIn("OFERTAMELI15", copy["body"])
+
+    def test_sem_cupom_nao_aparece_linha_de_cupom(self):
+        copy = gerar_copy(PRODUTO_VERIFIED, "oferta-padrao", provider="fallback", seed=1)
+        self.assertNotIn("cupom", copy["body"].lower())
+
+    def test_vendidos_poucos_nao_aparece(self):
+        produto = dict(PRODUTO_VERIFIED, sold_count=3)
+        copy = gerar_copy(produto, "oferta-beneficios", provider="fallback", seed=1)
+        self.assertNotIn("vendidos", copy["body"])
+
+    def test_vendidos_muitos_aparece(self):
+        produto = dict(PRODUTO_VERIFIED, sold_count=1200)
+        copy = gerar_copy(produto, "oferta-beneficios", provider="fallback", seed=1)
+        self.assertIn("1.200 vendidos", copy["body"])
+
+    def test_preco_formato_brasileiro(self):
+        copy = gerar_copy(PRODUTO_VERIFIED, "oferta-padrao", provider="fallback", seed=1)
+        self.assertIn("R$ 49,90", copy["body"])
+        self.assertIn("R$ 99,90", copy["body"])
+
+
+class EscolherImagemLimpaTests(unittest.TestCase):
+    """Checagem de imagem via IA de visão — opt-in (IMAGE_QUALITY_CHECK_
+    ENABLED), best-effort: nunca deixa o produto sem imagem por causa
+    disso, mesmo se a checagem falhar ou não estiver ligada."""
+
+    PRODUTO = {
+        "main_image_url": "https://img/principal.jpg",
+        "image_urls": '["https://img/a.jpg", "https://img/b.jpg"]',
+    }
+
+    def test_desligado_por_padrao_devolve_principal_sem_chamar_ia(self):
+        os.environ.pop("IMAGE_QUALITY_CHECK_ENABLED", None)
+        checar = mock.Mock()
+        resultado = escolher_imagem_limpa(self.PRODUTO, checar=checar)
+        self.assertEqual(resultado, "https://img/principal.jpg")
+        checar.assert_not_called()
+
+    def test_ligado_escolhe_primeira_sem_marca(self):
+        os.environ["IMAGE_QUALITY_CHECK_ENABLED"] = "true"
+        try:
+            # True = tem marca/texto (rejeitada); só "b" devolve False (limpa).
+            def checar(url):
+                return {"https://img/principal.jpg": True,
+                        "https://img/a.jpg": True,
+                        "https://img/b.jpg": False}[url]
+            resultado = escolher_imagem_limpa(self.PRODUTO, checar=checar)
+            self.assertEqual(resultado, "https://img/b.jpg")
+        finally:
+            os.environ.pop("IMAGE_QUALITY_CHECK_ENABLED", None)
+
+    def test_ligado_mas_nenhuma_limpa_cai_na_principal(self):
+        os.environ["IMAGE_QUALITY_CHECK_ENABLED"] = "1"
+        try:
+            resultado = escolher_imagem_limpa(self.PRODUTO, checar=lambda url: True)
+            self.assertEqual(resultado, "https://img/principal.jpg")
+        finally:
+            os.environ.pop("IMAGE_QUALITY_CHECK_ENABLED", None)
+
+    def test_falha_na_checagem_none_nao_bloqueia(self):
+        os.environ["IMAGE_QUALITY_CHECK_ENABLED"] = "1"
+        try:
+            resultado = escolher_imagem_limpa(self.PRODUTO, checar=lambda url: None)
+            self.assertEqual(resultado, "https://img/principal.jpg")
+        finally:
+            os.environ.pop("IMAGE_QUALITY_CHECK_ENABLED", None)
+
+    def test_sem_imagem_nenhuma_devolve_none(self):
+        os.environ.pop("IMAGE_QUALITY_CHECK_ENABLED", None)
+        self.assertIsNone(escolher_imagem_limpa({}))
 
 
 class AdaptersTests(unittest.TestCase):
@@ -170,6 +246,54 @@ class AliExpressConnectorTests(unittest.TestCase):
         self.assertEqual(health["connector_type"], "MANUAL")
         self.assertEqual(health["credential_status"], "NOT_CONFIGURED")
 
+    def test_external_id_fallback_productids(self):
+        """Short-link resolvido pode deixar o ID em productIds na query."""
+        self.assertEqual(
+            self.conector._external_id(
+                "https://pt.aliexpress.com/item.html?spm=a2g0o&productIds=1005001234"),
+            "1005001234")
+
+    def test_external_id_fallback_sequencia_longa(self):
+        """Fallback: sequência numérica de 8+ dígitos vira o ID do produto."""
+        self.assertEqual(
+            self.conector._external_id(
+                "https://pt.aliexpress.com/item.html?spm=abc123456789"),
+            "123456789")
+
+    def test_shortlink_resolve_para_produto(self):
+        """s.click/aliexpress resolvido para um produto -> extrai o ID."""
+        url_produto = "https://pt.aliexpress.com/item/1005009876543.html"
+        with mock.patch("connectors.aliexpress.resolve_shortlink",
+                        return_value=url_produto):
+            produto = self.conector.get_product(
+                "https://s.click.aliexpress.com/e/_oHmAbCd")
+        self.assertEqual(produto["external_product_id"], "1005009876543")
+        self.assertEqual(produto["canonical_url"], url_produto)
+
+    def test_shortlink_falha_resolucao_sem_credencial_nao_quebra(self):
+        """Redirect indisponível sem credencial -> MANUAL/UNKNOWN sem rede
+        (mesmo comportamento do modo manual normal, nunca quebra)."""
+        with mock.patch("connectors.aliexpress.resolve_shortlink",
+                        return_value=None):
+            produto = self.conector.get_product(
+                "https://s.click.aliexpress.com/e/_oQmAbCd")
+        self.assertEqual(produto["method"], "MANUAL")
+        self.assertEqual(produto["source_confidence"], "UNKNOWN")
+        self.assertIsNone(produto["external_product_id"])
+
+    def test_shortlink_falha_resolucao_com_credencial_levanta_erro(self):
+        """Com API configurada, short-link irresolúvel levanta erro claro
+        de ID não encontrado (não inventa ID nem chama rede com lixo)."""
+        creds_fake = ("app_key", "app_secret", "tracking_id")
+        with mock.patch("connectors.aliexpress.resolve_shortlink",
+                        return_value=None), \
+             mock.patch("connectors.aliexpress._credenciais",
+                        return_value=creds_fake):
+            with self.assertRaises(ValueError) as ctx:
+                self.conector.get_product(
+                    "https://s.click.aliexpress.com/e/_oQmAbCd")
+        self.assertIn("ID do produto", str(ctx.exception))
+
 
 class MercadoLivreConnectorTests(unittest.TestCase):
     def setUp(self):
@@ -216,9 +340,22 @@ class MercadoLivreConnectorTests(unittest.TestCase):
         self.assertEqual(self.conector._external_id(self.URL_BR),
                          "MLB2837492291")
 
+    def test_external_id_prioriza_item_sobre_catalogo(self):
+        """URL de catálogo (.../p/MLB<catalogo>) com item_id/wid na query
+        ou no fragment tem que extrair o ID do ANÚNCIO, não o do
+        catálogo — /items/ não aceita ID de catálogo."""
+        url_catalogo = (
+            "https://www.mercadolivre.com.br/creatina-monohidratada-pura-"
+            "1kg-dark-lab-unidade-sem-sabor/p/MLB25929487"
+            "?pdp_filters=item_id%3AMLB4812130742&matt_event_ts=123"
+            "#polycard_client=recommendations_home_affiliate-profile"
+            "&wid=MLB4812130742&sid=recos")
+        self.assertEqual(self.conector._external_id(url_catalogo),
+                         "MLB4812130742")
+
     def test_get_product_api_com_mock(self):
         """Dados reais da API oficial (fixture) — sem rede nos testes."""
-        def fake_get_json(url, timeout=10):
+        def fake_get_json(url, timeout=10, access_token=None):
             if "/items/" in url:
                 return dict(self.ITEM_FIXTURE)
             if "/categories/" in url:
@@ -247,7 +384,7 @@ class MercadoLivreConnectorTests(unittest.TestCase):
     def test_anuncio_inexistente_404(self):
         from urllib.error import HTTPError
 
-        def fake_get_json(url, timeout=10):
+        def fake_get_json(url, timeout=10, access_token=None):
             if "/items/" in url:
                 err = HTTPError(url, 404, "Not Found", None, None)
                 err.close()
@@ -280,7 +417,7 @@ class MercadoLivreConnectorTests(unittest.TestCase):
 
     def test_shortlink_resolve_para_produto(self):
         """meli.la resolvido para um anúncio -> extrai o ID normalmente."""
-        def fake_get_json(url, timeout=10):
+        def fake_get_json(url, timeout=10, access_token=None):
             if "/items/" in url:
                 return dict(self.ITEM_FIXTURE)
             if "/categories/" in url:
@@ -316,6 +453,46 @@ class MercadoLivreConnectorTests(unittest.TestCase):
                         return_value=None):
             with self.assertRaises(ValueError):
                 self.conector.get_product("https://meli.la/2qHBFJR")
+
+    def _fake_urlopen_capturando(self, capturado):
+        class FakeResp:
+            def __enter__(self_r):
+                return self_r
+
+            def __exit__(self_r, *exc):
+                return False
+
+            def read(self_r):
+                return b'{"id": "MLB2837492291"}'
+
+        def fake_urlopen(req, timeout=10):
+            capturado.append(req)
+            return FakeResp()
+        return fake_urlopen
+
+    def test_com_access_token_envia_authorization_bearer(self):
+        """Conector construído com access_token manda Authorization:
+        Bearer nas chamadas de leitura — tentativa de driblar o 403
+        PolicyAgent que a API pública devolve pra tráfego anônimo."""
+        capturado: list = []
+        conector = MercadoLivreConnector(access_token="tok-123")
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=self._fake_urlopen_capturando(capturado)):
+            conector.get_product(self.URL_BR)
+        self.assertTrue(capturado, "nenhuma chamada HTTP foi feita")
+        primeira = capturado[0]
+        self.assertEqual(primeira.get_header("Authorization"), "Bearer tok-123")
+
+    def test_sem_access_token_nao_envia_authorization(self):
+        """Sem token (ninguém conectou OAuth, ou expirou), continua 100%
+        anônimo — nenhuma regressão no caminho de hoje."""
+        capturado: list = []
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=self._fake_urlopen_capturando(capturado)):
+            self.conector.get_product(self.URL_BR)
+        self.assertTrue(capturado, "nenhuma chamada HTTP foi feita")
+        primeira = capturado[0]
+        self.assertIsNone(primeira.get_header("Authorization"))
 
 
 if __name__ == "__main__":

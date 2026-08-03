@@ -21,9 +21,15 @@ import urllib.request
 from typing import Any, Optional
 
 from . import CredencialNaoConfigurada, MarketplaceConnector
+from ._shortlink import resolve_shortlink
 
 API_GATEWAY = "https://api-sg.aliexpress.com/sync"
 PRODUCT_ID_RE = re.compile(r"/item/(\d+)\.html")
+# s.click/a.aliexpress: encurtadores oficiais (link de "compartilhar") — o
+# ID do produto só aparece na URL final, depois do redirect.
+SHORTLINK_HOSTS = ("s.click.aliexpress.com", "a.aliexpress.com")
+PRODUCT_IDS_RE = re.compile(r"productIds=(\d+)")
+FALLBACK_ID_RE = re.compile(r"(\d{8,})")
 
 
 def _credenciais() -> Optional[tuple[str, str, Optional[str]]]:
@@ -129,11 +135,27 @@ class AliExpressConnector(MarketplaceConnector):
 
     def _external_id(self, url: str) -> Optional[str]:
         match = PRODUCT_ID_RE.search(url)
+        if match:
+            return match.group(1)
+        # link curto resolvido pode deixar o ID em productIds na query
+        match = PRODUCT_IDS_RE.search(url)
+        if match:
+            return match.group(1)
+        # fallback: sequência numérica longa (8+ dígitos), como o ID do
+        # produto costuma aparecer depois do redirect
+        match = FALLBACK_ID_RE.search(url)
         return match.group(1) if match else None
 
     def get_product(self, url: str) -> dict[str, Any]:
         if not self.detect_url(url):
             raise ValueError(f"URL não é da AliExpress: {url}")
+
+        host = urllib.parse.urlparse(url).netloc.lower()
+        if host in SHORTLINK_HOSTS:
+            resolvida = resolve_shortlink(url)
+            if resolvida:
+                url = resolvida
+
         canonical = self.normalize_url(url)
         external_id = self._external_id(url)
         creds = _credenciais()
@@ -163,7 +185,11 @@ class AliExpressConnector(MarketplaceConnector):
         if not external_id:
             raise ValueError(
                 "Não foi possível extrair o ID do produto da URL — "
-                "esperado padrão /item/<numero>.html")
+                "esperado padrão /item/<numero>.html (ex: "
+                "aliexpress.com/item/100500123456789.html). Se o link "
+                "curto (s.click/a.aliexpress.com) aponta para uma busca "
+                "ou página de campanha em vez de um produto específico, "
+                "cole o link do produto.")
 
         app_key, app_secret, tracking_id = creds
         resposta = _chamar_api(

@@ -9,6 +9,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { BadgeCheck, LineChart, Search, Send } from "lucide-react";
 
 const STATUS_LABEL: Record<string, string> = {
   IMPORTED: "Importado",
@@ -30,8 +31,15 @@ const STATUS_LABEL: Record<string, string> = {
 export default async function DashboardPage() {
   const supabase = await createClient();
 
-  const [{ count: totalCampanhas }, { count: publicadas }, { count: cliques }] =
-    await Promise.all([
+  const [
+    { count: totalCampanhas },
+    { count: publicadas },
+    { count: cliques },
+    { count: produtos },
+    { count: revisar },
+    { count: filaPendente },
+    { count: gruposAtivos },
+  ] = await Promise.all([
       supabase.from("campaigns").select("*", { count: "exact", head: true }),
       supabase
         .from("campaigns")
@@ -40,6 +48,19 @@ export default async function DashboardPage() {
       supabase
         .from("affiliate_clicks")
         .select("*", { count: "exact", head: true }),
+      supabase.from("products").select("*", { count: "exact", head: true }),
+      supabase
+        .from("campaigns")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "REVIEW_REQUIRED"),
+      supabase
+        .from("queue_items")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "PENDING"),
+      supabase
+        .from("channel_groups")
+        .select("*", { count: "exact", head: true })
+        .eq("is_active", true),
     ]);
 
   const { data: recentes } = await supabase
@@ -56,6 +77,45 @@ export default async function DashboardPage() {
   const mlExpirado =
     mlCred && mlCred.expires_at && new Date(mlCred.expires_at) <= new Date();
 
+  const etapas = [
+    {
+      nome: "Garimpar",
+      descricao: "Compare produtos pelo Topfy Score antes de criar campanha.",
+      valor: produtos ?? 0,
+      metrica: "produtos no radar",
+      href: "/sugestoes",
+      acao: "Ver sugestões",
+      icon: Search,
+    },
+    {
+      nome: "Aprovar",
+      descricao: "Revise dados, copy e link antes de liberar qualquer envio.",
+      valor: revisar ?? 0,
+      metrica: "aguardando revisão",
+      href: "/campanhas",
+      acao: "Revisar campanhas",
+      icon: BadgeCheck,
+    },
+    {
+      nome: "Distribuir",
+      descricao: `Envie com intervalo e janela para ${gruposAtivos ?? 0} grupo${gruposAtivos === 1 ? "" : "s"} ativo${gruposAtivos === 1 ? "" : "s"}.`,
+      valor: filaPendente ?? 0,
+      metrica: "itens aguardando",
+      href: "/filas",
+      acao: "Gerenciar filas",
+      icon: Send,
+    },
+    {
+      nome: "Medir",
+      descricao: "Use sinais próprios para decidir o que manter, ajustar ou parar.",
+      valor: cliques ?? 0,
+      metrica: "cliques rastreados",
+      href: "/sistema",
+      acao: "Abrir monitoramento",
+      icon: LineChart,
+    },
+  ];
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -70,6 +130,62 @@ export default async function DashboardPage() {
           Nova campanha
         </Link>
       </div>
+
+      <section className="overflow-hidden rounded-xl border border-[#34404f] bg-[#1F2837] text-white shadow-soft">
+        <div className="grid gap-8 border-b border-white/10 px-6 py-7 lg:grid-cols-[1fr_auto] lg:items-end lg:px-8">
+          <div className="max-w-2xl">
+            <p className="text-[9px] font-extrabold uppercase tracking-[2.5px] text-[#f03a50]">
+              Ciclo operacional
+            </p>
+            <h2 className="mt-2 font-display text-3xl font-bold tracking-tight">
+              Da oportunidade ao aprendizado, sem perder o controle.
+            </h2>
+            <p className="mt-3 text-sm leading-relaxed text-white/60">
+              O Topfy separa curadoria, aprovação, distribuição e resultado.
+              Automação executa; você decide o que entra e o que continua.
+            </p>
+          </div>
+          <Link
+            href="/campanhas/nova"
+            className="inline-flex h-10 items-center justify-center rounded-full bg-primary px-5 text-sm font-bold text-white transition-colors hover:bg-[#b81427]"
+          >
+            Começar por um produto
+          </Link>
+        </div>
+
+        <div className="grid md:grid-cols-2 xl:grid-cols-4">
+          {etapas.map((etapa, index) => {
+            const Icon = etapa.icon;
+            return (
+              <Link
+                key={etapa.nome}
+                href={etapa.href}
+                className="group relative flex min-h-56 flex-col border-white/10 p-6 transition-colors hover:bg-white/[0.055] md:border-r md:[&:nth-child(2)]:border-r-0 xl:[&:nth-child(2)]:border-r xl:[&:last-child]:border-r-0"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-[10px] font-bold tracking-[2px] text-white/35">
+                    0{index + 1}
+                  </span>
+                  <Icon className="size-5 text-[#f03a50]" aria-hidden="true" />
+                </div>
+                <h3 className="mt-6 text-base font-bold">{etapa.nome}</h3>
+                <p className="mt-2 text-xs leading-relaxed text-white/52">
+                  {etapa.descricao}
+                </p>
+                <div className="mt-auto flex items-end justify-between gap-3 pt-6">
+                  <div>
+                    <p className="font-display text-3xl font-bold">{etapa.valor}</p>
+                    <p className="text-[10px] text-white/40">{etapa.metrica}</p>
+                  </div>
+                  <span className="text-xs font-semibold text-white/65 transition-colors group-hover:text-white">
+                    {etapa.acao} →
+                  </span>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </section>
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Card>

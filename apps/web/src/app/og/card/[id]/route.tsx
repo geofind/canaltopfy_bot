@@ -56,10 +56,29 @@ async function loadFonts(): Promise<Font[]> {
 
 async function fetchImageAsDataUrl(url: string): Promise<string | null> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    const res = await fetch(url, {
+      headers: { accept: "image/jpeg,image/png,image/webp;q=0.9" },
+      signal: AbortSignal.timeout(6000),
+    });
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
-    const type = res.headers.get("content-type") ?? "image/jpeg";
+    const magic = buf.subarray(0, 12).toString("latin1");
+    let type: string;
+    if (buf[0] === 0xff && buf[1] === 0xd8) {
+      type = "image/jpeg";
+    } else if (
+      buf[0] === 0x89 &&
+      buf[1] === 0x50 &&
+      buf[2] === 0x4e &&
+      buf[3] === 0x47
+    ) {
+      type = "image/png";
+    } else if (magic.startsWith("RIFF") && magic.includes("WEBP")) {
+      type = "image/webp";
+    } else {
+      type = res.headers.get("content-type") ?? "image/jpeg";
+    }
+    if (type !== "image/jpeg" && type !== "image/png") return null;
     return `data:${type};base64,${buf.toString("base64")}`;
   } catch {
     return null;
@@ -257,10 +276,8 @@ export async function GET(
             lineHeight: 1.3,
             fontWeight: 700,
             textAlign: "center",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
+            display: "flex",
+            alignItems: "center",
           }}
         >
           {titulo}

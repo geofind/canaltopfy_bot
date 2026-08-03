@@ -206,9 +206,14 @@ def publicar_oferta_telegram(
             {"chat_id": chat_id, "caption": mensagem, "parse_mode": "HTML"},
             foto_bytes, sleep_fn=sleep_fn)
     else:
+        # Sem foto (download do card falhou), cai pra texto puro — mas com
+        # preview de link DESLIGADO: sem isso, o Telegram gera uma prévia
+        # feia da própria página de origem (AliExpress/ML) a partir do link
+        # de afiliado embutido no CTA, expondo a loja e o texto dela em vez
+        # do card da Topfy.
         resposta = _chamar_api("sendMessage", {
             "chat_id": chat_id, "text": mensagem, "parse_mode": "HTML",
-            "disable_web_page_preview": False}, sleep_fn=sleep_fn)
+            "disable_web_page_preview": True}, sleep_fn=sleep_fn)
 
     if not resposta.get("ok"):
         motivo = resposta.get("description") or "resposta sem 'ok'"

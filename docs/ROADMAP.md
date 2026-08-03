@@ -33,6 +33,9 @@
 - [x] Organizar produtos publicados por categoria, destacar a entrada mais
       recente e manter avisos claros sobre afiliados, preço e disponibilidade
 - [x] Documentar o roteiro de revisão da página para uso com Claude no Chrome
+- [x] Evoluir a direção visual da vitrine com referência estrutural do Wati:
+      hero editorial, CTAs em cápsula, painel vivo do produto e blocos suaves,
+      preservando logo, navy/vermelho e tipografia CanalTopfy
 - [ ] Cadastrar categorias consistentes nos produtos publicados para evitar o
       agrupamento genérico “Achadinhos”
 - [ ] Criar IDs de rastreamento Amazon distintos por canal/campanha e importar
@@ -40,6 +43,27 @@
       prova de comissão
 - [ ] Após elegibilidade, avaliar a Creators API para atualização autorizada de
       catálogo; até lá, manter a entrada Amazon manual e supervisionada
+
+### Benchmark Achadinho Pro — automação orientada por operação
+
+- [x] Mapear proposta, fluxo, recursos e posicionamento público do Achadinho Pro
+- [x] Confirmar os recursos equivalentes já existentes no Topfy: múltiplas
+      fontes, Topfy Score, grupos, filas, janelas de envio, CTAs variáveis,
+      rastreamento e deduplicação por campanha/grupo
+- [x] Tornar o ciclo “garimpar → aprovar → distribuir → medir” visível no
+      dashboard, usando somente contagens reais da organização
+- [ ] Adicionar nichos/tags aos grupos e filas para distribuir cada categoria à
+      audiência correta
+- [ ] Trocar a deduplicação definitiva por um cooldown configurável, mantendo
+      bloqueio absoluto como padrão e auditoria de cada republicação
+- [ ] Criar reciclagem supervisionada apenas para campanhas com desempenho
+      comprovado; toda reentrada deve exigir regra explícita e janela mínima
+- [ ] Permitir listas personalizadas com expiração e fonte registradas, sem
+      captura proibida ou enriquecimento inventado
+- [ ] Criar relatório por grupo, categoria e faixa de horário antes de qualquer
+      otimização automática de cadência
+- [ ] WhatsApp somente pela Business Cloud API oficial, com opt-in, templates e
+      limites documentados; não reproduzir automações via sessão do WhatsApp Web
 
 - WhatsApp Business Cloud API (opt-in, templates, janela 24h)
 - Amazon Creators API (após elegibilidade — 10 vendas qualificadas/30 dias)

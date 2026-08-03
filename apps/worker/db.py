@@ -8,6 +8,7 @@ external_id).
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from supabase import create_client, Client
@@ -37,6 +38,22 @@ def get_product(product_id: str) -> Optional[dict[str, Any]]:
 
 def update_product(product_id: str, fields: dict[str, Any]) -> None:
     _get().table("products").update(fields).eq("id", product_id).execute()
+
+
+def get_ml_access_token(organization_id: str) -> Optional[str]:
+    """access_token do Mercado Livre já conectado pela org (ml_credentials),
+    só se ainda não tiver expirado — sem refresh (este app do ML não emite
+    refresh_token confiável; expirado exige reconectar em /integracoes)."""
+    resp = (_get().table("ml_credentials").select("access_token, expires_at")
+            .eq("organization_id", organization_id).maybe_single().execute())
+    if not resp.data:
+        return None
+    expira = resp.data.get("expires_at")
+    if expira:
+        venceu = datetime.fromisoformat(expira.replace("Z", "+00:00"))
+        if venceu <= datetime.now(timezone.utc):
+            return None
+    return resp.data.get("access_token")
 
 
 def get_campaign(campaign_id: str) -> Optional[dict[str, Any]]:
@@ -122,6 +139,19 @@ def list_channel_groups(organization_id: str) -> list[dict[str, Any]]:
     return resp.data or []
 
 
+def get_active_coupons(organization_id: str,
+                      source_name: Optional[str] = None) -> list[dict[str, Any]]:
+    """Cupons cadastrados e ativos — nunca inventados pela copy, só
+    aparecem no post se estiverem aqui. Prioriza cupom específico da loja
+    (source_name); sem nenhum específico, usa os "vale pra qualquer loja"
+    (source_name nulo no cadastro)."""
+    todos = (_get().table("coupon_codes").select("code, label, source_name")
+             .eq("organization_id", organization_id)
+             .eq("is_active", True).order("created_at").execute().data or [])
+    especificos = [c for c in todos if source_name and c.get("source_name") == source_name]
+    return especificos or [c for c in todos if not c.get("source_name")]
+
+
 def get_cta_phrases(organization_id: str) -> list[dict[str, Any]]:
     resp = (_get().table("cta_phrases").select("phrase")
             .eq("organization_id", organization_id)
@@ -144,7 +174,7 @@ def get_queue_groups(queue_id: str) -> list[dict[str, Any]]:
 def get_last_dispatched_at(queue_id: str) -> Optional[str]:
     resp = (_get().table("queue_items")
             .select("dispatched_at").eq("queue_id", queue_id)
-            .neq("dispatched_at", None)
+            .not_.is_("dispatched_at", "null")
             .order("dispatched_at", desc=True).limit(1).execute())
     if not resp.data:
         return None

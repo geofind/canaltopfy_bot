@@ -18,6 +18,21 @@ const URL_PRODUTO = z.string().url().refine(
   },
 );
 
+const URL_AFILIADO_ML = z.string().url().refine((value) => {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    const allowed = ["meli.la", "mercadolivre.com.br", "mercadolibre.com.br"];
+    return parsed.protocol === "https:" && allowed.some(
+      (domain) => host === domain || host.endsWith(`.${domain}`),
+    );
+  } catch {
+    return false;
+  }
+}, {
+  message: "Use o link HTTPS devolvido pelo Gerador oficial (normalmente meli.la).",
+});
+
 function sourceNameFromUrl(url: string): string {
   if (url.includes("aliexpress.")) {
     return "aliexpress";
@@ -266,6 +281,80 @@ export async function createCampaignFromUrl(
   return { ok: true };
 }
 
+export async function completeMercadoLivreAutomation(
+  campaignId: string,
+  _prev: CampaignActionState,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) {
+    return { error: "Sessão expirada — entre novamente." };
+  }
+
+  const parsedLink = URL_AFILIADO_ML.safeParse(
+    String(formData.get("affiliate_url") ?? "").trim(),
+  );
+  if (!parsedLink.success) {
+    return { error: parsedLink.error.issues[0]?.message ?? "Link inválido." };
+  }
+  const queueId = String(formData.get("queue_id") ?? "").trim();
+  if (!queueId) {
+    return { error: "Selecione a fila automática do Telegram." };
+  }
+
+  const { data: campaign } = await supabase
+    .from("campaigns")
+    .select("id, product_id")
+    .eq("id", campaignId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (!campaign) {
+    return { error: "Campanha não encontrada nesta organização." };
+  }
+  const [{ data: product }, { data: queue }] = await Promise.all([
+    supabase
+      .from("products")
+      .select("id, source_name")
+      .eq("id", campaign.product_id)
+      .eq("organization_id", organizationId)
+      .maybeSingle(),
+    supabase
+      .from("queues")
+      .select("id")
+      .eq("id", queueId)
+      .eq("organization_id", organizationId)
+      .eq("is_active", true)
+      .maybeSingle(),
+  ]);
+  if (!product || product.source_name !== "mercadolivre") {
+    return { error: "Esta campanha não pertence ao Mercado Livre." };
+  }
+  if (!queue) {
+    return { error: "A fila selecionada não existe ou está desativada." };
+  }
+
+  const { error } = await supabase.from("jobs").insert({
+    organization_id: organizationId,
+    type: "mercadolivre.link.ready",
+    payload: {
+      campaign_id: campaignId,
+      affiliate_url: parsedLink.data,
+      official_tool_confirmed: true,
+      auto_approve: true,
+      queue_id: queueId,
+      agent: "hermes",
+    },
+  });
+  if (error) {
+    return { error: "Não foi possível entregar o link ao agente." };
+  }
+
+  revalidatePath(`/campanhas/${campaignId}`);
+  revalidatePath("/filas");
+  return { ok: true };
+}
+
 export async function approveCampaignContent(
   campaignId: string,
   contentId: string,
@@ -488,6 +577,12 @@ export async function createQueue(
   }
   if (!Number.isFinite(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 240) {
     return { error: "Intervalo deve estar entre 1 e 240 minutos." };
+  }
+  if ((windowStart && !windowEnd) || (!windowStart && windowEnd)) {
+    return {
+      error:
+        "Preencha início e fim da janela ou deixe os dois em branco (24h).",
+    };
   }
 
   const { data: fila, error } = await supabase

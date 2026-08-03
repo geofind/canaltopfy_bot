@@ -8,6 +8,7 @@ import {
   addToQueue,
   regenerateContents,
   updateCardConfig,
+  completeMercadoLivreAutomation,
   type CampaignActionState,
 } from "@/lib/actions";
 import { Button } from "@/components/ui/button";
@@ -52,6 +53,82 @@ export type QueueOption = { id: string; name: string };
 
 const inputClass =
   "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+export function MercadoLivreAutomationForm({
+  campaignId,
+  filas,
+}: {
+  campaignId: string;
+  filas: QueueOption[];
+}) {
+  const router = useRouter();
+  const [state, formAction, pending] = useActionState(
+    (prev: CampaignActionState, fd: FormData) =>
+      completeMercadoLivreAutomation(campaignId, prev, fd),
+    initialState,
+  );
+
+  useEffect(() => {
+    if (state.ok) {
+      router.refresh();
+    }
+  }, [state.ok, router]);
+
+  return (
+    <form action={formAction} className="space-y-4">
+      {state.error && (
+        <Alert variant="destructive">
+          <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
+      )}
+      {state.ok && (
+        <Alert>
+          <AlertDescription>
+            Link entregue. O worker vai gerar a copy, aprovar e enviar para a fila.
+          </AlertDescription>
+        </Alert>
+      )}
+      <div className="space-y-2">
+        <label htmlFor="affiliate_url" className="text-sm font-medium leading-none">
+          Link criado pelo Hermes no Gerador oficial
+        </label>
+        <input
+          id="affiliate_url"
+          name="affiliate_url"
+          type="url"
+          required
+          placeholder="https://meli.la/..."
+          className={inputClass}
+        />
+      </div>
+      <div className="space-y-2">
+        <label htmlFor="ml_queue_id" className="text-sm font-medium leading-none">
+          Fila automática do Telegram
+        </label>
+        <select
+          id="ml_queue_id"
+          name="queue_id"
+          required
+          defaultValue=""
+          className={inputClass}
+        >
+          <option value="" disabled>Selecione a fila…</option>
+          {filas.map((fila) => (
+            <option key={fila.id} value={fila.id}>{fila.name}</option>
+          ))}
+        </select>
+      </div>
+      <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs text-muted-foreground">
+        Modo automático: sem aprovação humana. O agente valida o link, gera a
+        copy, aprova a primeira versão válida e agenda a publicação. Links
+        duplicados ou campanhas já publicadas são bloqueados.
+      </div>
+      <Button type="submit" disabled={pending || filas.length === 0}>
+        {pending ? "Entregando ao agente…" : "Continuar e publicar automaticamente"}
+      </Button>
+    </form>
+  );
+}
 
 export function SchedulePublicationForm({
   campaignId,

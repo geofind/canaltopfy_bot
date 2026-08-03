@@ -52,55 +52,80 @@ def _nome_loja(loja: Optional[str]) -> Optional[str]:
 
 
 def _fmt_preco(valor: Optional[float]) -> str:
-    return f"R$ {valor:.2f}" if valor is not None else "a confirmar"
+    """R$ no padrão brasileiro (vírgula decimal, ponto de milhar) — ex.:
+    R$ 1.799,00, não R$ 1799.00."""
+    if valor is None:
+        return "a confirmar"
+    txt = f"{valor:,.2f}"  # "1,799.00" (formato US: vírgula=milhar, ponto=decimal)
+    txt = txt.replace(",", "@").replace(".", ",").replace("@", ".")
+    return f"R$ {txt}"
 
 
 def _nome(product: dict[str, Any]) -> str:
     return product.get("title") or f"Produto #{product.get('id', '?')}"
 
 
-def _fatos(product: dict[str, Any]) -> list[str]:
+# "vendidos" só ajuda a vender quando é um número que impressiona — "0
+# vendidos" ou "2 vendidos" passa a impressão contrária. Sem fonte pra
+# definir "muitos" de forma objetiva, usa um piso conservador.
+VENDAS_MINIMO_PARA_EXIBIR = 20
+
+
+def _fatos_extras(product: dict[str, Any]) -> list[str]:
+    """Fatos além do preço (que já vai na linha ❌/💸) — usado só no
+    template "oferta-beneficios" como complemento."""
     fatos = []
-    if product.get("current_price") is not None:
-        fatos.append(f"Preço observado: {_fmt_preco(product['current_price'])}")
-    if product.get("original_price") is not None and product.get("discount_percent") is not None:
-        fatos.append(f"Desconto real: {product['discount_percent']:.0f}%")
-    if product.get("sold_count") is not None:
+    if (product.get("sold_count") is not None
+            and product["sold_count"] >= VENDAS_MINIMO_PARA_EXIBIR):
         fatos.append(f"{product['sold_count']:,} vendidos".replace(",", "."))
     if product.get("rating") is not None:
         fatos.append(f"Avaliação: {product['rating']:.1f}/5")
-    if not fatos:
-        fatos.append("Ficha ainda sem fatos confirmados — revisar antes de publicar.")
     return fatos
+
+
+def _linha_preco(product: dict[str, Any]) -> Optional[str]:
+    """Linha "❌de R$ X | 💸por R$ Y 🔥" — nunca inventa desconto: o preço
+    original só entra se vier confirmado E for maior que o atual."""
+    atual = product.get("current_price")
+    if atual is None:
+        return None
+    original = product.get("original_price")
+    nota = (product.get("payment_note") or "").strip()
+    partes = []
+    if original is not None and original > atual:
+        partes.append(f"❌de {_fmt_preco(original)}")
+    partes.append(f"💸por {_fmt_preco(atual)} 🔥" + (f" {nota}" if nota else ""))
+    return " | ".join(partes)
+
+
+def _linhas_cupom(product: dict[str, Any]) -> list[str]:
+    """Linha(s) de cupom — só aparece se um cupom real estiver cadastrado
+    (product['coupons'] ou coupon_code); nunca inventado. Mais de um
+    cupom vira uma linha "ou" por cupom extra, como nos canais de
+    ofertas (ex.: cupom exclusivo Meli+ + cupom geral)."""
+    cupons = product.get("coupons") or (
+        [{"code": product["coupon_code"], "label": product.get("coupon_label")}]
+        if product.get("coupon_code") else [])
+    linhas = []
+    for i, cupom in enumerate(cupons):
+        codigo = cupom.get("code") if isinstance(cupom, dict) else cupom
+        if not codigo:
+            continue
+        rotulo = cupom.get("label") if isinstance(cupom, dict) else None
+        prefixo = "🎟️Use o cupom: " if i == 0 else "🎟️ou "
+        sufixo = f" ({rotulo})" if rotulo else ""
+        linhas.append(f"{prefixo}{codigo}{sufixo}")
+    return linhas
 
 
 def _headline_variantes(product: dict[str, Any],
                         loja: Optional[str] = None) -> list[str]:
+    """🚨 chama atenção — o gancho engraçado/irônico de verdade fica a
+    cargo da IA (prompt em _gerar_openrouter); o fallback determinístico
+    (sem IA) fica no formato simples e honesto de sempre."""
     nome = _nome(product)
-    atual = product.get("current_price")
-    original = product.get("original_price")
-    loja_nome = _nome_loja(loja)
-    if atual is not None and original is not None and original > atual:
-        preco_atual, preco_original = _fmt_preco(atual), _fmt_preco(original)
-        if loja_nome:
-            return [
-                f"{nome} na {loja_nome} — de {preco_original} por {preco_atual}",
-                f"{nome} caiu de preço na {loja_nome}: agora {preco_atual}",
-                f"Encontrei {nome} na {loja_nome} por {preco_atual} "
-                f"(era {preco_original})",
-            ]
-        return [
-            f"{nome} — de {preco_original} por {preco_atual}",
-            f"{nome} caiu de preço: agora {preco_atual}",
-            f"Encontrei {nome} por {preco_atual} (era {preco_original})",
-        ]
-    if atual is not None:
-        preco_atual = _fmt_preco(atual)
-        if loja_nome:
-            return [f"{nome} na {loja_nome} — {preco_atual}",
-                    f"{nome} por {preco_atual} na {loja_nome}"]
-        return [f"{nome} — {preco_atual}", f"{nome} por {preco_atual}"]
-    return [f"{nome} — preço a confirmar"]
+    sufixo = f" na {loja_nome}" if (loja_nome := _nome_loja(loja)) else ""
+    return [f"🚨 {nome}{sufixo}", f"🔥 {nome}{sufixo}", f"👀 {nome}{sufixo}"]
 
 
 def _cta_variantes(product: dict[str, Any]) -> list[str]:
@@ -110,22 +135,16 @@ def _cta_variantes(product: dict[str, Any]) -> list[str]:
 def _gerar_fallback(product: dict[str, Any], template_id: str, seed: Optional[int],
                     loja: Optional[str] = None) -> dict[str, str]:
     rng = random.Random(seed)
-    fatos = _fatos(product)
-    if template_id == "oferta-curta":
-        nome = _nome(product)
-        preco = product.get("current_price")
-        loja_nome = _nome_loja(loja)
-        if loja_nome:
-            body = (f"{nome} na {loja_nome}\n{_fmt_preco(preco)}"
-                    if preco is not None
-                    else f"{nome} na {loja_nome}\nPreço a confirmar na loja.")
-        else:
-            body = (f"{nome}\n{_fmt_preco(preco)}" if preco is not None
-                    else f"{nome}\nPreço a confirmar na loja.")
-    elif template_id == "oferta-beneficios":
-        body = "O que já está confirmado:\n" + "\n".join(f"- {f}" for f in fatos)
-    else:
-        body = "Fatos observados na ficha:\n" + "\n".join(f"- {f}" for f in fatos)
+    linha_preco = _linha_preco(product)
+    partes = [linha_preco] if linha_preco else ["Preço a confirmar na loja."]
+    partes.extend(_linhas_cupom(product))
+
+    if template_id == "oferta-beneficios":
+        extras = _fatos_extras(product)
+        if extras:
+            partes.append("\n".join(f"- {f}" for f in extras))
+
+    body = "\n\n".join(partes)
     return {
         "template_id": template_id,
         "headline": rng.choice(_headline_variantes(product, loja)),
@@ -149,13 +168,32 @@ def _gerar_openrouter(product: dict[str, Any], template_id: str,
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
     model = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat:free")
     prompt = (
-        "Você escreve copy de afiliado em português do Brasil. Use APENAS "
-        "os fatos abaixo — NUNCA invente preço, desconto, avaliação, prazo "
-        "ou estoque. Responda APENAS com um objeto JSON, sem texto fora "
-        "dele: {\"headline\": string, \"body\": string, \"cta\": string}. "
-        "Disclaimer obrigatório no fim do body: \"Link de afiliado: se "
-        "você comprar por aqui, o Topfy pode ganhar uma comissão, sem "
-        "custo extra para você.\"\n\n"
+        "Você escreve legendas de oferta pra um canal de Telegram "
+        "brasileiro de achadinhos/cupons — tom direto, informal, com "
+        "emojis, no estilo desses canais. Use APENAS os fatos abaixo — "
+        "NUNCA invente preço, desconto, avaliação, cupom, prazo ou "
+        "estoque; se um dado não estiver nos fatos, simplesmente não "
+        "mencione. Responda APENAS com um objeto JSON, sem texto fora "
+        "dele: {\"headline\": string, \"body\": string, \"cta\": string}.\n\n"
+        "- headline: uma linha curta e chamativa com 1-2 emojis — pode ser "
+        "leve, engraçada ou uma dica de uso pra esse produto específico "
+        "(ex.: \"🧻 Pra não sair ensopando o banheiro inteiro\"); se não "
+        "tiver uma ideia boa e específica pro produto, use só "
+        "\"🚨 <nome do produto>\". NUNCA invente um motivo/característica "
+        "que não esteja nos fatos ou no nome do produto.\n"
+        "- body: se a headline foi uma piada/dica (não o nome do produto), "
+        "comece o body com o nome do produto; depois a linha de preço no "
+        "formato \"❌de R$ X,XX | 💸por R$ Y,YY 🔥\" (formato brasileiro, "
+        "vírgula decimal — inclua o \"❌de\" só se houver preço original "
+        "nos fatos, maior que o atual); se os fatos tiverem cupom(ns), "
+        "adicione uma linha \"🎟️Use o cupom: CODIGO\" por cupom (a partir "
+        "do segundo, use \"🎟️ou CODIGO\"). Só mencione quantidade vendida "
+        "(sold_count) se for um número que realmente impressiona (dezenas "
+        "ou mais) — nunca escreva \"0 vendidos\" ou uma contagem baixa, "
+        "nesse caso simplesmente omita.\n"
+        "- cta: chamada curta (ex.: \"Ver oferta\").\n\n"
+        "Não inclua o disclaimer de afiliado — ele é adicionado depois "
+        "automaticamente.\n\n"
         f"Fatos:\n{json.dumps(product, ensure_ascii=False)}"
         + (f"\nLoja de origem: {_nome_loja(loja)}" if _nome_loja(loja) else "")
     )
@@ -239,3 +277,84 @@ def validar_copy(copy: dict[str, Any]) -> list[str]:
         if frase in texto:
             problemas.append(f"Frase proibida encontrada: '{frase}'.")
     return problemas
+
+
+def _imagem_quality_check_ativado() -> bool:
+    return os.environ.get("IMAGE_QUALITY_CHECK_ENABLED", "").lower() in ("1", "true", "yes")
+
+
+def _imagem_tem_marca_ou_texto(url: str) -> Optional[bool]:
+    """Pergunta pra um modelo de visão (OpenRouter) se a foto tem texto
+    sobreposto (banner/chamada de marketing) ou marca/logo estampada —
+    best-effort: None se a checagem falhar (sem chave, modelo
+    indisponível, timeout, resposta fora do padrão); nunca derruba a
+    escolha de imagem por causa disso. Modelo configurável via
+    OPENROUTER_VISION_MODEL (precisa suportar entrada de imagem)."""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        return None
+    model = os.environ.get("OPENROUTER_VISION_MODEL", "google/gemini-2.0-flash-exp:free")
+    prompt = (
+        "Esta é uma foto de produto de e-commerce. Ela tem texto "
+        "sobreposto (banners, chamadas tipo \"Wireless Fast Charging\", "
+        "preço) ou uma marca/logo do vendedor estampada visivelmente na "
+        "imagem (não apenas no produto físico em si)? Responda APENAS "
+        "com um JSON: {\"tem_marca_ou_texto\": true ou false}."
+    )
+    body = json.dumps({
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": url}},
+            ],
+        }],
+        "response_format": {"type": "json_object"},
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        OPENROUTER_API_URL, data=body, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "X-Title": "Topfy Affiliate OS",
+        })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            bruto = json.loads(resp.read().decode("utf-8"))
+        conteudo = bruto["choices"][0]["message"]["content"]
+        resposta = json.loads(conteudo)
+        return bool(resposta.get("tem_marca_ou_texto"))
+    except (urllib.error.URLError, json.JSONDecodeError, ValueError, KeyError, IndexError):
+        return None
+
+
+def escolher_imagem_limpa(product: dict[str, Any], *,
+                         checar: Any = _imagem_tem_marca_ou_texto) -> Optional[str]:
+    """Tenta achar, entre as fotos da galeria do produto (image_urls),
+    uma sem texto/marca sobreposta — OPT-IN via IMAGE_QUALITY_CHECK_
+    ENABLED (custa 1 chamada de IA por foto candidata, então desligado
+    por padrão). Sem isso ligado, ou se nenhuma checagem vier False, cai
+    na imagem principal de sempre — nunca deixa o produto sem imagem por
+    causa disso."""
+    principal = product.get("main_image_url") or product.get("image_url")
+    if not _imagem_quality_check_ativado():
+        return principal
+
+    candidatas: list[str] = [principal] if principal else []
+    extra = product.get("image_urls")
+    if extra:
+        try:
+            lista = json.loads(extra) if isinstance(extra, str) else extra
+            candidatas.extend(lista)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    vistas: set[str] = set()
+    for url in candidatas:
+        if not url or url in vistas:
+            continue
+        vistas.add(url)
+        if checar(url) is False:
+            return url
+    return principal

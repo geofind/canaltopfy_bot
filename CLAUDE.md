@@ -26,7 +26,7 @@ com link de afiliado rastreado. MVP funcional, em pt-BR.
 - Site de controle: /sistema (jobs, falhas, atividade do worker), /integracoes
   (ML conectar/desconectar, status Telegram), detalhe da campanha com
   cliques/conversões/comissão (últimos 20).
-- Testes: worker 28/28 (py 3.14.6 e 3.11); E2E Playwright 9/9 (chromium).
+- E2E Playwright 9/9 (chromium).
 - Visual CanalTopfy (referência: TopFy_Affiliate_Lab, não retrogames): sidebar
   navy #1F2837 250px + topbar com logo-mark, paleta em globals.css (light
   padrão, bg #F5F5F5, vermelho #D71931, font-display serif, shadow-soft),
@@ -35,6 +35,21 @@ com link de afiliado rastreado. MVP funcional, em pt-BR.
   nav-bar.tsx; dashboard movido para (app)/page.tsx. Icon: src/app/icon.png.
 - OAuth ML: migração 0007 (ml_refresh_token nullable) + callback com
   auto-refresh de token. Playwright usa baseURL lvh.me (regra 4).
+- Short-links em conectores: apps/worker/connectors/_shortlink.py
+  (resolve_shortlink, redirect só por Location, stdlib) — extraído do
+  padrão que já existia em connectors/amazon.py (_NoAutoRedirect/
+  _RedirectCapturado), não de fonte externa. Mercado Livre (meli.la) usa;
+  AliExpress (s.click/a.aliexpress) resolve antes de extrair o ID em
+  get_product e _external_id tem fallback productIds= → /item/<id> →
+  dígitos 8+.
+- Mercado Livre: conector aceita access_token opcional (Bearer) vindo do
+  OAuth já conectado em ml_credentials — tentativa best-effort contra o
+  403 PolicyAgent da API pública (regra 6). get_connector/import_product
+  recebem organization_id opcional pra buscar o token; sem token, cai no
+  caminho anônimo de sempre. _external_id prioriza item_id/wid sobre o ID
+  de catálogo em URLs .../p/MLB<catalogo>.
+- Testes worker 90/90 no py 3.14.6; py 3.11 roda worker_core+amazon
+  (59/59) — test_pipeline_extra exige supabase, só existe no env 3.14.
 - Build, lint e tsc limpos. Último commit: 739eac7f (já no GitHub:
   github.com/geofind/canaltopfy_bot, branch master).
 
