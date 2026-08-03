@@ -86,6 +86,75 @@ class NormalizarProductRowTests(unittest.TestCase):
         self.assertNotIn("Ficha ainda sem fatos confirmados", texto)
         self.assertNotIn("preço a confirmar", texto)
 
+    def test_normaliza_metadado_de_estoque_local_do_card(self):
+        row = {
+            **self.PRODUCT_ROW_BANCO,
+            "card_config": {
+                "theme": "navy",
+                "local_stock": {
+                    "country": "BR",
+                    "status": "DECLARED_TITLE",
+                    "evidence": "Informado no título do anúncio",
+                },
+            },
+        }
+        normalizado = pipeline.normalizar_product_row(row)
+        self.assertEqual(normalizado["local_stock_country"], "BR")
+        self.assertEqual(normalizado["local_stock_status"], "DECLARED_TITLE")
+
+
+class EstoqueLocalCopyTests(unittest.TestCase):
+    def test_copy_destaca_declaracao_do_anuncio_com_ressalva(self):
+        produto = {
+            **PRODUTO,
+            "local_stock_country": "BR",
+            "local_stock_status": "DECLARED_TITLE",
+        }
+        copia = gerar_copy(produto, provider="fallback", seed=1)
+        self.assertIn("ESTOQUE NO BRASIL", copia["body"])
+        self.assertIn("informado no anúncio", copia["body"])
+
+    def test_copy_comum_nao_inventa_estoque_local(self):
+        copia = gerar_copy(PRODUTO, provider="fallback", seed=1)
+        self.assertNotIn("ESTOQUE NO BRASIL", copia["body"])
+
+
+class DestaqueImperdivelCopyTests(unittest.TestCase):
+    def test_mais_de_cinquenta_por_cento_fica_muito_destacado(self):
+        produto = {
+            **PRODUTO,
+            "deal_highlight_reason": "DISCOUNT_OVER_50",
+            "deal_highlight": {"reason": "DISCOUNT_OVER_50"},
+        }
+        copia = gerar_copy(produto, provider="fallback", seed=1)
+        self.assertIn("🚨🔥 IMPERDÍVEL 🔥🚨", copia["headline"])
+        self.assertIn("MAIS DE 50% DE DESCONTO CONFIRMADO", copia["body"])
+
+    def test_desconto_entre_50_e_51_nao_arredonda_para_50_no_destaque(self):
+        produto = {
+            **PRODUTO,
+            "current_price": 49.5,
+            "original_price": 100,
+            "deal_highlight_reason": "DISCOUNT_OVER_50",
+            "deal_highlight": {"reason": "DISCOUNT_OVER_50"},
+        }
+        copia = gerar_copy(produto, provider="fallback", seed=1)
+        self.assertIn("-50,5%", copia["body"])
+
+    def test_menor_preco_mostra_periodo_confirmado(self):
+        produto = {
+            **PRODUTO,
+            "deal_highlight_reason": "RECENT_LOW",
+            "deal_highlight": {"reason": "RECENT_LOW", "lookback_days": 30},
+        }
+        copia = gerar_copy(produto, provider="fallback", seed=1)
+        self.assertIn("IMPERDÍVEL", copia["headline"])
+        self.assertIn("MENOR PREÇO CONFIRMADO DOS ÚLTIMOS 30 DIAS", copia["body"])
+
+    def test_sem_evidencia_nao_usa_imperdivel(self):
+        copia = gerar_copy(PRODUTO, provider="fallback", seed=1)
+        self.assertNotIn("IMPERDÍVEL", copia["headline"])
+
 
 class FakeTable:
     """Encadeamento de query PostgREST mínimo para os testes."""
@@ -111,6 +180,10 @@ class FakeTable:
 
     def lte(self, *a, **k):
         self.calls.append(("lte", a, k))
+        return self
+
+    def gte(self, *a, **k):
+        self.calls.append(("gte", a, k))
         return self
 
     def order(self, *a, **k):
@@ -254,6 +327,61 @@ class ImagemPostTests(unittest.TestCase):
         with mock.patch.object(pipeline, "extrair_og_image") as mock_extrai:
             pipeline.imagem_para_post({"image_url": None, "source_url": None})
         mock_extrai.assert_not_called()
+
+
+class ImagemCupomTests(unittest.TestCase):
+    """Campanha de cupom (coupon_discovery.py) usa o selo oficial da loja
+    em vez da foto de produto — só quando o item É um cupom."""
+
+    def test_campanha_de_cupom_usa_selo_da_loja(self):
+        produto = {
+            "source_name": "shopee",
+            "image_url": "https://img/produto-generico.jpg",
+            "card_config": {"coupon_offer": {"coupon_code": "ABC123"}},
+        }
+        with mock.patch.dict(os.environ, {
+                "CANALTOPFY_PUBLIC_BASE_URL": "https://web.exemplo"}):
+            self.assertEqual(
+                pipeline.imagem_cupom_url(produto),
+                "https://web.exemplo/cupons/shopee.png")
+            self.assertEqual(
+                pipeline.imagem_para_post(produto),
+                "https://web.exemplo/cupons/shopee.png")
+
+    def test_produto_comum_nao_usa_selo_de_cupom(self):
+        produto = {
+            "source_name": "shopee",
+            "image_url": "https://img/produto-real.jpg",
+            "card_config": {"deal_highlight": {"level": "MUST_SEE"}},
+        }
+        with mock.patch.dict(os.environ, {
+                "CANALTOPFY_PUBLIC_BASE_URL": "https://web.exemplo"}):
+            self.assertIsNone(pipeline.imagem_cupom_url(produto))
+            self.assertEqual(
+                pipeline.imagem_para_post(produto), "https://img/produto-real.jpg")
+
+    def test_sem_base_url_configurada_cai_na_foto_normal(self):
+        produto = {
+            "source_name": "shopee",
+            "image_url": "https://img/produto-real.jpg",
+            "card_config": {"coupon_offer": {"coupon_code": "ABC123"}},
+        }
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(pipeline.imagem_cupom_url(produto))
+            self.assertEqual(
+                pipeline.imagem_para_post(produto), "https://img/produto-real.jpg")
+
+    def test_fonte_sem_selo_cadastrado_cai_na_foto_normal(self):
+        produto = {
+            "source_name": "aliexpress",
+            "image_url": "https://img/produto-real.jpg",
+            "card_config": {"coupon_offer": {"coupon_code": "ABC123"}},
+        }
+        with mock.patch.dict(os.environ, {
+                "CANALTOPFY_PUBLIC_BASE_URL": "https://web.exemplo"}):
+            self.assertIsNone(pipeline.imagem_cupom_url(produto))
+            self.assertEqual(
+                pipeline.imagem_para_post(produto), "https://img/produto-real.jpg")
 
 
 class PublishToTelegramUsaFotoRealTests(unittest.TestCase):
@@ -415,6 +543,47 @@ class DispatchQueuesTests(unittest.TestCase):
                                 despachados = pipeline.dispatch_queues(now=agora)
         self.assertEqual(pub.call_count, 1)
         self.assertEqual(len(despachados), 1)
+
+    def test_pula_categoria_igual_e_publica_alternativa(self):
+        fila = self._fila(organization_id="org1")
+        itens = [
+            {"id": "i1", "campaign_id": "c1", "content_id": "co1",
+             "attempts": 0, "campaign": {"product": {
+                 "category": "Eletrônicos", "title": "Carregador USB-C"}}},
+            {"id": "i2", "campaign_id": "c2", "content_id": "co2",
+             "attempts": 0, "campaign": {"product": {
+                 "category": "Informática", "title": "Monitor 24"}}},
+        ]
+        with mock.patch.object(db, "get_active_queues", return_value=[fila]), \
+             mock.patch.object(db, "get_last_dispatched_at", return_value=None), \
+             mock.patch.object(db, "get_pending_queue_items", return_value=itens), \
+             mock.patch.object(db, "get_last_done_queue_product", return_value={
+                 "category": "Acessórios", "title": "Carregador rápido"}), \
+             mock.patch.object(db, "get_queue_groups", return_value=[{"group_id": "g1"}]), \
+             mock.patch.object(db, "mark_queue_item") as mark, \
+             mock.patch.object(pipeline, "publish_to_telegram",
+                               return_value={"publication_id": "p1"}) as publish:
+            pipeline.dispatch_queues(now=datetime(2026, 8, 2, 17, tzinfo=timezone.utc))
+        self.assertEqual(publish.call_args.args[:2], ("c2", "co2"))
+        self.assertEqual(mark.call_args_list[0].args[0], "i2")
+
+    def test_aguarda_quando_so_ha_mesma_categoria(self):
+        fila = self._fila(organization_id="org1")
+        item = {"id": "i1", "campaign_id": "c1", "content_id": "co1",
+                "attempts": 0, "campaign": {"product": {
+                    "category": "Eletrônicos", "title": "Carregador USB-C"}}}
+        with mock.patch.object(db, "get_active_queues", return_value=[fila]), \
+             mock.patch.object(db, "get_last_dispatched_at", return_value=None), \
+             mock.patch.object(db, "get_pending_queue_items", return_value=[item]), \
+             mock.patch.object(db, "get_last_done_queue_product", return_value={
+                 "category": "Acessórios", "title": "Carregador rápido"}), \
+             mock.patch.object(db, "get_queue_groups", return_value=[{"group_id": "g1"}]), \
+             mock.patch.object(db, "register_audit"), \
+             mock.patch.object(pipeline, "publish_to_telegram") as publish:
+            result = pipeline.dispatch_queues(
+                now=datetime(2026, 8, 2, 17, tzinfo=timezone.utc))
+        self.assertEqual(result, [])
+        publish.assert_not_called()
 
     def test_sem_janela_despacha_de_madrugada_24h(self):
         """Fila sem window_start/window_end (24h) tem que despachar em
@@ -701,6 +870,132 @@ class MercadoLivreHermesFlowTests(unittest.TestCase):
         self.assertIn(mock.call("c1", {"status": "SCHEDULED"}),
                       update_campaign.call_args_list)
         self.assertGreaterEqual(audit.call_count, 2)
+
+
+class TitulosParecidosTests(unittest.TestCase):
+    """Regressão real: 3 anúncios do "mesmo" iPhone 16e (vendedores
+    diferentes, URLs diferentes) publicados ao mesmo tempo — dedupe por
+    source_url não pega isso porque a URL do anúncio é mesmo diferente.
+    Limiares calibrados empiricamente contra títulos reais de anúncio."""
+
+    def test_titulos_do_mesmo_aparelho_sao_parecidos(self):
+        self.assertTrue(pipeline._titulos_parecidos(
+            "iPhone 16e Apple 128GB Novo Lacrado Original Preto",
+            "iPhone 16e Apple 128GB Original Lacrado - Cor Preta"))
+        self.assertTrue(pipeline._titulos_parecidos(
+            "Apple iPhone 16e 128GB Novo Original Preto Lacrado",
+            "iPhone 16e Apple 128GB Novo Lacrado Original Preto"))
+
+    def test_titulos_de_produtos_diferentes_nao_sao_parecidos(self):
+        self.assertFalse(pipeline._titulos_parecidos(
+            "iPhone 16e Apple 128GB Novo Lacrado",
+            "Samsung Galaxy S24 256GB Novo Lacrado"))
+        self.assertFalse(pipeline._titulos_parecidos(
+            "Fone Bluetooth XYZ TWS", "Mouse Sem Fio K7 Ultra Branco"))
+
+    def test_variantes_diferentes_do_mesmo_modelo_nao_sao_parecidas(self):
+        """Cor/armazenamento diferentes contam como produto diferente —
+        a trava é só contra publicar a MESMA oferta repetida, não contra
+        mostrar variantes distintas de um mesmo modelo."""
+        self.assertFalse(pipeline._titulos_parecidos(
+            "iPhone 16e 128GB Preto", "iPhone 16e 256GB Azul"))
+
+    def test_titulo_vazio_nunca_e_parecido(self):
+        self.assertFalse(pipeline._titulos_parecidos("", "iPhone 16e"))
+        self.assertFalse(pipeline._titulos_parecidos("iPhone 16e", ""))
+
+
+class ManterSoMaisBaratoPorProdutoTests(unittest.TestCase):
+    def test_mantem_so_o_mais_barato_entre_titulos_parecidos(self):
+        produtos = [
+            {"title": "iPhone 16e Apple 128GB Novo Lacrado Original Preto",
+             "current_price": 3200.0, "canonical_url": "https://x/1"},
+            {"title": "iPhone 16e Apple 128GB Original Lacrado - Cor Preta",
+             "current_price": 2950.0, "canonical_url": "https://x/2"},
+            {"title": "Apple iPhone 16e 128GB Novo Original Preto Lacrado",
+             "current_price": 3100.0, "canonical_url": "https://x/3"},
+        ]
+        resultado = pipeline._manter_so_mais_barato_por_produto(produtos)
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0]["current_price"], 2950.0)
+
+    def test_produtos_diferentes_nao_sao_agrupados(self):
+        produtos = [
+            {"title": "iPhone 16e Apple 128GB Novo Lacrado", "current_price": 3200.0},
+            {"title": "Samsung Galaxy S24 256GB Novo Lacrado", "current_price": 2500.0},
+        ]
+        resultado = pipeline._manter_so_mais_barato_por_produto(produtos)
+        self.assertEqual(len(resultado), 2)
+
+    def test_sem_preco_no_duplicado_mantem_o_que_ja_tinha_preco(self):
+        produtos = [
+            {"title": "iPhone 16e 128GB Novo Lacrado", "current_price": 3000.0},
+            {"title": "iPhone 16e 128GB Novo Lacrado Original", "current_price": None},
+        ]
+        resultado = pipeline._manter_so_mais_barato_por_produto(produtos)
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0]["current_price"], 3000.0)
+
+
+class ExisteProdutoSimilarRecenteTests(unittest.TestCase):
+    """Trava contra publicar o "mesmo" aparelho de novo em ciclos
+    seguintes, mesmo com product_id/URL diferentes (outro vendedor)."""
+
+    def test_encontra_titulo_parecido_recente(self):
+        table = FakeTable(rows=[{"title": "iPhone 16e Apple 128GB Original Lacrado"}])
+        client = mock.MagicMock()
+        client.table.return_value = table
+        with mock.patch.object(db, "_get", return_value=client):
+            resultado = pipeline._existe_produto_similar_recente(
+                "org1", "iPhone 16e Apple 128GB Novo Lacrado Original Preto")
+        self.assertTrue(resultado)
+
+    def test_sem_titulo_parecido_devolve_false(self):
+        table = FakeTable(rows=[{"title": "Samsung Galaxy S24"}])
+        client = mock.MagicMock()
+        client.table.return_value = table
+        with mock.patch.object(db, "_get", return_value=client):
+            resultado = pipeline._existe_produto_similar_recente("org1", "iPhone 16e 128GB")
+        self.assertFalse(resultado)
+
+    def test_titulo_vazio_nao_consulta_banco(self):
+        with mock.patch.object(db, "_get") as get_mock:
+            resultado = pipeline._existe_produto_similar_recente("org1", "")
+        self.assertFalse(resultado)
+        get_mock.assert_not_called()
+
+
+class CategoriaRecenteDemaisTests(unittest.TestCase):
+    """Espaçamento por categoria: depois de publicar um fone de ouvido,
+    espera pelo menos CATEGORIA_JANELA_MINIMA campanhas de outra
+    categoria antes de publicar outro fone de ouvido."""
+
+    def test_mesma_categoria_dentro_da_janela_bloqueia(self):
+        rows = [{"id": str(i), "product": {"category": "Eletrônicos > Fones de Ouvido"}}
+                for i in range(3)]
+        table = FakeTable(rows=rows)
+        client = mock.MagicMock()
+        client.table.return_value = table
+        with mock.patch.object(db, "_get", return_value=client):
+            resultado = pipeline._categoria_recente_demais(
+                "org1", "Eletrônicos > Fones de Ouvido")
+        self.assertTrue(resultado)
+
+    def test_categoria_diferente_nao_bloqueia(self):
+        rows = [{"id": "1", "product": {"category": "Celulares > Smartphones"}}]
+        table = FakeTable(rows=rows)
+        client = mock.MagicMock()
+        client.table.return_value = table
+        with mock.patch.object(db, "_get", return_value=client):
+            resultado = pipeline._categoria_recente_demais(
+                "org1", "Eletrônicos > Fones de Ouvido")
+        self.assertFalse(resultado)
+
+    def test_sem_categoria_nunca_bloqueia_e_nao_consulta_banco(self):
+        with mock.patch.object(db, "_get") as get_mock:
+            resultado = pipeline._categoria_recente_demais("org1", None)
+        self.assertFalse(resultado)
+        get_mock.assert_not_called()
 
 
 class DescobrirProdutosAliexpressTests(unittest.TestCase):

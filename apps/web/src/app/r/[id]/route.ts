@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -8,7 +8,10 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const supabase = await createClient();
+  // Esta rota é pública por definição: o clique vem de fora da sessão do
+  // dashboard. O cliente administrativo fica restrito ao servidor e busca
+  // somente a publicação solicitada antes de registrar o clique.
+  const supabase = createAdminClient();
 
   const { data: publication } = await supabase
     .from("publications")

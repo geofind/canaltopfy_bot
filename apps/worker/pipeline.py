@@ -23,6 +23,8 @@ from __future__ import annotations
 import html.parser
 import os
 import random
+import re
+import unicodedata
 import urllib.error
 import urllib.request
 import uuid
@@ -34,14 +36,22 @@ import db
 from connectors import CredencialNaoConfigurada
 from connectors.aliexpress import AliExpressConnector
 from connectors.amazon import AmazonConnector
+from connectors.magalu import MagaluConnector
 from connectors.mercadolivre import MercadoLivreConnector
-from content import gerar_copy, validar_copy, escolher_imagem_limpa
+from connectors.shopee import ShopeeConnector
+from content import (aplicar_hashtags_produto, escolher_imagem_limpa,
+                     gerar_copy, validar_copy)
+from editorial_profile import editorial_affinity, sort_by_editorial_affinity
+from offer_rules import (category_family, category_lock_reason, deal_highlight,
+                         is_blocked_by_word)
 from scoring import calcular_score
 
 CONECTORES = {
     "aliexpress": AliExpressConnector,
     "amazon": AmazonConnector,
+    "magalu": MagaluConnector,
     "mercadolivre": MercadoLivreConnector,
+    "shopee": ShopeeConnector,
 }
 
 CTA_PADRAO = ("Ver oferta", "Conferir na loja", "Ver oferta na loja")
@@ -59,6 +69,54 @@ def get_connector(source_name: str, organization_id: Optional[str] = None):
         token = db.get_ml_access_token(organization_id)
         return cls(access_token=token)
     return cls()
+
+
+def _local_stock_config(product: dict[str, Any]) -> Optional[dict[str, str]]:
+    """Converte apenas evidência explícita de estoque local em metadado."""
+    country = str(product.get("local_stock_country") or "").upper()
+    status = str(product.get("local_stock_status") or "").upper()
+    if country != "BR" or status not in ("VERIFIED_API", "DECLARED_TITLE"):
+        return None
+    return {
+        "country": "BR",
+        "status": status,
+        "evidence": str(product.get("local_stock_evidence") or "")[:300],
+    }
+
+
+def _recent_similar_prices(organization_id: Optional[str], product: dict[str, Any],
+                           *, days: int = 30) -> list[float]:
+    """Preços confirmados do mesmo produto/título no período recente."""
+    if not organization_id or not product.get("title"):
+        return []
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    try:
+        rows = (db._get().table("products")
+                .select("title,discounted_price_brl")
+                .eq("organization_id", organization_id)
+                .eq("source_name", product.get("source_name") or "aliexpress")
+                .gte("collected_at", since).execute().data or [])
+    except (RuntimeError, AttributeError):
+        # Modo offline/testes sem Supabase: desconto real continua sendo
+        # avaliado, mas histórico nunca é presumido.
+        return []
+    prices: list[float] = []
+    for row in rows:
+        if _titulos_parecidos(str(product.get("title") or ""),
+                              str(row.get("title") or "")):
+            value = row.get("discounted_price_brl")
+            if value is not None:
+                prices.append(float(value))
+    return prices
+
+
+def _deal_highlight_config(product: dict[str, Any],
+                           historical_prices: list[float]) -> Optional[dict[str, Any]]:
+    return deal_highlight(
+        current_price=product.get("current_price"),
+        original_price=product.get("original_price"),
+        historical_prices=historical_prices,
+    )
 
 
 def import_product(source_name: str, url: str, *,
@@ -88,6 +146,8 @@ def import_product(source_name: str, url: str, *,
         "discount_percent": "discount_pct",
         "commission_percent": "commission_pct",
         "sold_count": "sales_count",
+        "rating": "rating",
+        "reviews_count": "reviews_count",
         "positive_feedback_percent": None,  # usado pelo score, não persiste
         "currency": "currency",
     }
@@ -103,6 +163,18 @@ def import_product(source_name: str, url: str, *,
     for origem, destino in campo_map.items():
         if destino and produto.get(origem) is not None:
             row[destino] = produto[origem]
+
+    local_stock = _local_stock_config(produto)
+    destaque = _deal_highlight_config(
+        produto, _recent_similar_prices(organization_id, {
+            **produto, "source_name": source_name}))
+    card_config: dict[str, Any] = {}
+    if local_stock:
+        card_config["local_stock"] = local_stock
+    if destaque:
+        card_config["deal_highlight"] = destaque
+    if card_config:
+        row["card_config"] = card_config
 
     if not row.get("title"):
         # título é not null na tabela — quando o conector não devolve
@@ -129,6 +201,8 @@ IMPORT_FIELD_MAP = {
     "discount_percent": "discount_pct",
     "commission_percent": "commission_pct",
     "sold_count": "sales_count",
+    "rating": "rating",
+    "reviews_count": "reviews_count",
     "currency": "currency",
 }
 
@@ -172,9 +246,164 @@ def descobrir_produtos_aliexpress(termos: list[str], *,
     return encontrados
 
 
+def descobrir_produtos_shopee(termos: list[str], *,
+                              max_por_termo: int = 20,
+                              paginas: int = 1) -> list[dict[str, Any]]:
+    """Busca ofertas elegíveis na Shopee Affiliate Open API oficial.
+
+    O endpoint já devolve ``offerLink``, preço, desconto, comissão e imagem.
+    Falhas de um termo não cancelam os demais e nenhum dado é obtido por
+    scraping ou sessão do navegador.
+    """
+    conector = ShopeeConnector()
+    encontrados: list[dict[str, Any]] = []
+    for termo in termos:
+        coletados = 0
+        for pagina in range(1, max(1, paginas) + 1):
+            try:
+                resultados = conector.search_offers(termo, page_no=pagina)
+            except (CredencialNaoConfigurada, RuntimeError):
+                break
+            if not resultados:
+                break
+            restantes = max_por_termo - coletados
+            encontrados.extend(resultados[:restantes])
+            coletados += min(len(resultados), restantes)
+            if coletados >= max_por_termo:
+                break
+    return encontrados
+
+
+def descobrir_produtos_magalu(termos: list[str]) -> list[dict[str, Any]]:
+    """Consulta o catálogo inicial auditável de páginas oficiais Magalu."""
+    conector = MagaluConnector()
+    encontrados: list[dict[str, Any]] = []
+    vistos: set[str] = set()
+    for termo in termos:
+        for oferta in conector.search_offers(termo):
+            url = oferta.get("canonical_url")
+            if url and url not in vistos:
+                vistos.add(url)
+                encontrados.append(oferta)
+    return encontrados
+
+
+# Palavras de marketing que não identificam o produto em si — descartadas
+# antes de comparar títulos (senão "novo lacrado frete grátis" em comum
+# faz título de produtos totalmente diferentes parecerem o mesmo).
+_RUIDO_TITULO = {
+    "novo", "nova", "novos", "novas", "original", "originais", "lacrado",
+    "lacrada", "lacrados", "lacradas", "pronta", "pronto", "entrega",
+    "frete", "gratis", "gratuito", "envio", "rapido", "rapida",
+    "promocao", "oferta", "ofertas", "cor", "cores", "escolha",
+    "unissex", "importado", "importada", "top", "premium", "garantia",
+    "com", "sem", "de", "da", "do", "das", "dos", "para", "e", "ou",
+    "em", "no", "na", "un", "unidade", "unidades",
+}
+
+
+def _normalizar_titulo(titulo: str) -> set[str]:
+    """Conjunto de palavras "de identidade" de um título de produto — só
+    pra detectar "mesmo aparelho, anúncio diferente" (ex.: o mesmo
+    iPhone 16e vendido por lojas distintas, cada uma com um texto de
+    marketing diferente), nunca pra decidir preço/desconto/avaliação
+    (isso continua vindo só da API)."""
+    sem_acento = unicodedata.normalize("NFKD", titulo or "")
+    sem_acento = "".join(c for c in sem_acento if not unicodedata.combining(c))
+    limpo = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", sem_acento.lower())).strip()
+    return {t for t in limpo.split() if t and t not in _RUIDO_TITULO}
+
+
+TITULO_SIMILARIDADE_MINIMA = 0.6
+
+
+def _titulos_parecidos(a: str, b: str,
+                       limiar: float = TITULO_SIMILARIDADE_MINIMA) -> bool:
+    """True quando dois títulos provavelmente descrevem o mesmo aparelho
+    — compara a semelhança (Jaccard) do conjunto de palavras relevantes
+    de cada título, ignorando ordem e palavras de marketing (calibrado
+    empiricamente: pares do "mesmo aparelho" ficam ≥0.6, pares de
+    produtos diferentes ficam ≤0.33)."""
+    ta, tb = _normalizar_titulo(a), _normalizar_titulo(b)
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / len(ta | tb) >= limiar
+
+
+def _manter_so_mais_barato_por_produto(
+        produtos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Trava contra publicar o "mesmo" produto mais de uma vez no mesmo
+    ciclo: quando a busca devolve vários anúncios pro mesmo aparelho
+    (ex.: 3 anúncios de iPhone 16e de vendedores diferentes), mantém só
+    o de menor preço — nunca inventa preço, só escolhe entre os reais já
+    devolvidos pela API."""
+    escolhidos: list[dict[str, Any]] = []
+    for produto in produtos:
+        titulo = produto.get("title") or ""
+        preco = produto.get("current_price")
+        indice = next((i for i, existente in enumerate(escolhidos)
+                       if _titulos_parecidos(titulo, existente.get("title") or "")),
+                      None)
+        if indice is None:
+            escolhidos.append(produto)
+            continue
+        preco_existente = escolhidos[indice].get("current_price")
+        if preco is not None and (preco_existente is None or preco < preco_existente):
+            escolhidos[indice] = produto
+    return escolhidos
+
+
+def _existe_produto_similar_recente(organization_id: str, titulo: str, *,
+                                    dias: int = 3,
+                                    source_name: str = "aliexpress") -> bool:
+    """Trava contra publicar o "mesmo" produto de novo em ciclos
+    seguintes (mesmo com product_id/URL diferentes — outro vendedor
+    anunciando o mesmo aparelho): compara por título normalizado contra
+    os produtos AliExpress já importados por essa organização nos
+    últimos `dias` dias. Dedupe por source_url (já existente) não pega
+    esse caso porque a URL do anúncio é mesmo diferente."""
+    if not titulo:
+        return False
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).isoformat()
+    recentes = (db._get().table("products").select("title")
+                .eq("organization_id", organization_id)
+                .eq("source_name", source_name)
+                .gte("collected_at", desde)
+                .execute().data) or []
+    return any(_titulos_parecidos(titulo, r.get("title") or "") for r in recentes)
+
+
+CATEGORIA_JANELA_MINIMA = 10
+
+
+def _categoria_recente_demais(organization_id: str, categoria: Optional[str], *,
+                              janela: int = CATEGORIA_JANELA_MINIMA) -> bool:
+    """Trava de diversidade: evita publicar produtos da mesma categoria
+    muito próximos uns dos outros (ex.: vários fones de ouvido seguidos)
+    — olha as últimas `janela` campanhas da organização (mais recentes
+    primeiro) e recusa se a mesma categoria já apareceu entre elas.
+    Categoria vem só da API (AliExpress: first_level > second_level);
+    sem categoria confirmada, nunca bloqueia — não inventa categoria."""
+    if not categoria:
+        return False
+    recentes = (db._get().table("campaigns")
+                .select("id, created_at, product:products(category)")
+                .eq("organization_id", organization_id)
+                .order("created_at", desc=True)
+                .limit(janela)
+                .execute().data) or []
+    for campanha in recentes:
+        produto = campanha.get("product") or {}
+        if produto.get("category") == categoria:
+            return True
+    return False
+
+
 def ciclo_automatico(organization_id: str, *, termos: list[str],
                      min_score: float = 60.0, max_novos: int = 5,
-                     queue_id: Optional[str] = None) -> dict[str, Any]:
+                     queue_id: Optional[str] = None,
+                     source_name: str = "aliexpress",
+                     min_discount_pct: Optional[float] = None) -> dict[str, Any]:
     """Modo 100% automático — OPT-IN via AUTO_PIPELINE_ENABLED, nunca
     ligado por padrão (spec do usuário pede explicitamente que não seja o
     padrão da aplicação). Descobre produto pela API oficial da
@@ -184,12 +413,45 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
     um score mínimo — e então enfileira em `queue_id` pra publicar no
     ritmo já configurado da fila (intervalo/janela). Produto que não
     passar fica só registrado no audit_log; dedupe por source_url evita
-    reimportar o mesmo produto em ciclos seguintes."""
+    reimportar o mesmo produto em ciclos seguintes, a trava de título
+    parecido (_manter_so_mais_barato_por_produto/_existe_produto_similar_
+    recente) evita publicar o "mesmo" aparelho mais de uma vez quando
+    vendedores diferentes anunciam o mesmo produto com URLs distintas
+    (ex.: 3 anúncios de iPhone 16e) — só a oferta mais barata segue — e a
+    trava de categoria (_categoria_recente_demais) evita publicar produtos
+    do mesmo tipo muito seguidos (ex.: vários fones de ouvido em sequência),
+    esperando pelo menos CATEGORIA_JANELA_MINIMA campanhas de outra
+    categoria entre uma e outra. Além disso, respeita a curadoria manual do
+    Laboratório de Captura (/campanhas): palavras bloqueadas, categorias
+    pausadas/travadas por tempo determinado e corte de score por
+    categoria — tudo lido de `db.get_capture_lab_config`, com fallback
+    silencioso pros defaults/env de sempre quando a config ainda não
+    existir."""
+    capture_config = db.get_capture_lab_config(organization_id)
+    if source_name == "aliexpress":
+        descobertos = descobrir_produtos_aliexpress(
+            termos, max_por_termo=20, paginas=5)
+    elif source_name == "shopee":
+        descobertos = descobrir_produtos_shopee(
+            termos, max_por_termo=20, paginas=1)
+    elif source_name == "magalu":
+        descobertos = descobrir_produtos_magalu(termos)
+    else:
+        raise ValueError("ciclo automático indisponível para " + source_name)
+
     criados: list[dict[str, Any]] = []
-    for produto_bruto in descobrir_produtos_aliexpress(
-            termos, max_por_termo=20, paginas=5):
+    candidatos_sem_duplicata = _manter_so_mais_barato_por_produto(descobertos)
+    # O seed Magalu já vem intercalado por família. Preservar essa ordem evita
+    # reagrupar TVs e fones antes da trava de diversidade da fila.
+    candidatos = (candidatos_sem_duplicata if source_name == "magalu" else
+                  sort_by_editorial_affinity(candidatos_sem_duplicata))
+    for produto_bruto in candidatos:
         if len(criados) >= max_novos:
             break
+        desconto = produto_bruto.get("discount_percent")
+        if (min_discount_pct is not None and
+                (desconto is None or float(desconto) < min_discount_pct)):
+            continue
         source_url = produto_bruto.get("canonical_url")
         if not source_url:
             continue
@@ -200,9 +462,49 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
         if ja_existe:
             continue
 
+        titulo_bruto = produto_bruto.get("title") or ""
+        termo_bloqueado = is_blocked_by_word(
+            titulo_bruto, produto_bruto.get("category"), capture_config["blocklist"])
+        if termo_bloqueado:
+            db.register_audit(
+                organization_id, actor_type="worker",
+                action="auto_pipeline_bloqueado_por_palavra",
+                entity_type="product", entity_id=source_url,
+                metadata={"title": titulo_bruto, "termo": termo_bloqueado})
+            continue
+
+        if _existe_produto_similar_recente(
+                organization_id, titulo_bruto, source_name=source_name):
+            db.register_audit(
+                organization_id, actor_type="worker",
+                action="auto_pipeline_produto_similar_ja_existe",
+                entity_type="product", entity_id=source_url,
+                metadata={"title": titulo_bruto})
+            continue
+
+        categoria_bruta = produto_bruto.get("category")
+        familia = category_family(categoria_bruta, titulo_bruto)
+        config_categoria = capture_config["categories"].get(familia) if familia else None
+        motivo_categoria = category_lock_reason(config_categoria)
+        if motivo_categoria:
+            db.register_audit(
+                organization_id, actor_type="worker",
+                action="auto_pipeline_categoria_bloqueada",
+                entity_type="product", entity_id=source_url,
+                metadata={"title": titulo_bruto, "category": categoria_bruta,
+                          "family": familia, "motivo": motivo_categoria})
+            continue
+        if _categoria_recente_demais(organization_id, categoria_bruta):
+            db.register_audit(
+                organization_id, actor_type="worker",
+                action="auto_pipeline_categoria_recente_demais",
+                entity_type="product", entity_id=source_url,
+                metadata={"title": titulo_bruto, "category": categoria_bruta})
+            continue
+
         product_row: dict[str, Any] = {
             "organization_id": organization_id,
-            "source_name": "aliexpress",
+            "source_name": source_name,
             "source_url": source_url,
             "method": produto_bruto.get("method", "API"),
             "confidence": produto_bruto.get("source_confidence", "UNKNOWN"),
@@ -212,6 +514,22 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
         for origem, destino in IMPORT_FIELD_MAP.items():
             if produto_bruto.get(origem) is not None:
                 product_row[destino] = produto_bruto[origem]
+        local_stock = _local_stock_config(produto_bruto)
+        destaque = _deal_highlight_config(
+            produto_bruto,
+            _recent_similar_prices(organization_id, {
+                **produto_bruto, "source_name": source_name}))
+        card_config: dict[str, Any] = {}
+        afinidade_editorial = editorial_affinity(
+            produto_bruto.get("title"), produto_bruto.get("category"))
+        if afinidade_editorial["priority"]:
+            card_config["editorial_profile"] = afinidade_editorial
+        if local_stock:
+            card_config["local_stock"] = local_stock
+        if destaque:
+            card_config["deal_highlight"] = destaque
+        if card_config:
+            product_row["card_config"] = card_config
         if not product_row.get("title"):
             continue
 
@@ -237,7 +555,7 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
             "slug": campaign_id,
         }).execute()
 
-        link = generate_affiliate_link("aliexpress", source_url)
+        link = generate_affiliate_link(source_name, source_url)
         db._get().table("products").update({
             "affiliate_link": link.get("affiliate_url"),
             "affiliate_link_status": link.get("verification_status", "UNKNOWN"),
@@ -252,16 +570,23 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
                 if k not in ("score_total", "reason_summary", "warnings", "bloqueios")},
         }).eq("id", product_id).execute()
 
-        if score["bloqueios"] or score["score_total"] < min_score:
+        corte_efetivo = min_score
+        if capture_config.get("min_score") is not None:
+            corte_efetivo = capture_config["min_score"]
+        if config_categoria and config_categoria.get("min_score") is not None:
+            corte_efetivo = float(config_categoria["min_score"])
+
+        if score["bloqueios"] or score["score_total"] < corte_efetivo:
             db.register_audit(
                 organization_id, actor_type="worker",
                 action="auto_pipeline_rejeitado", entity_type="product",
                 entity_id=str(product_id),
-                metadata={"bloqueios": score["bloqueios"],
-                          "score": score["score_total"]})
+                metadata={"title": titulo_bruto, "category": categoria_bruta,
+                          "bloqueios": score["bloqueios"],
+                          "score": score["score_total"], "corte": corte_efetivo})
             continue
 
-        cupons = db.get_active_coupons(organization_id, "aliexpress")
+        cupons = db.get_active_coupons(organization_id, source_name)
         if cupons:
             produto_atual["coupons"] = cupons
 
@@ -301,11 +626,13 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
             organization_id, actor_type="worker",
             action="auto_pipeline_aprovado", entity_type="campaign",
             entity_id=str(campaign_id),
-            metadata={"score": score["score_total"], "queue_id": queue_id})
+            metadata={"title": product_row.get("title"), "category": categoria_bruta,
+                      "score": score["score_total"], "queue_id": queue_id})
         criados.append({"campaign_id": campaign_id, "product_id": product_id,
                         "title": product_row.get("title"),
                         "score": score["score_total"]})
-    return {"total": len(criados), "campanhas": criados}
+    return {"total": len(criados), "campanhas": criados,
+            "source_name": source_name}
 
 
 def generate_affiliate_link(source_name: str, product_url: str) -> dict[str, Any]:
@@ -352,6 +679,23 @@ def normalizar_product_row(row: dict[str, Any]) -> dict[str, Any]:
     for chave_conector, coluna_db in PRODUCT_ROW_ALIASES.items():
         if dados.get(chave_conector) is None and dados.get(coluna_db) is not None:
             dados[chave_conector] = dados[coluna_db]
+    card_config = dados.get("card_config")
+    if isinstance(card_config, dict):
+        local_stock = card_config.get("local_stock")
+        if isinstance(local_stock, dict):
+            country = str(local_stock.get("country") or "").upper()
+            status = str(local_stock.get("status") or "").upper()
+            if country == "BR" and status in ("VERIFIED_API", "DECLARED_TITLE"):
+                dados.setdefault("local_stock_country", "BR")
+                dados.setdefault("local_stock_status", status)
+                dados.setdefault(
+                    "local_stock_evidence", str(local_stock.get("evidence") or ""))
+        deal = card_config.get("deal_highlight")
+        if isinstance(deal, dict) and deal.get("level") == "MUST_SEE":
+            reason = str(deal.get("reason") or "")
+            if reason in ("DISCOUNT_OVER_50", "RECENT_LOW"):
+                dados.setdefault("deal_highlight_reason", reason)
+                dados.setdefault("deal_highlight", dict(deal))
     return dados
 
 
@@ -432,10 +776,41 @@ def extrair_og_image(url: str, *, timeout: int = 15) -> Optional[str]:
         return None
 
 
+CUPOM_IMAGEM_POR_FONTE = {
+    "mercadolivre": "mercadolivre.png",
+    "shopee": "shopee.png",
+    "amazon": "amazon.png",
+}
+
+
+def imagem_cupom_url(produto: dict[str, Any]) -> Optional[str]:
+    """URL pública do selo oficial de cupom (ticket) por loja — só existe
+    quando o item É uma campanha de cupom (card_config.coupon_offer,
+    gravado por coupon_discovery.py), nunca num post de produto comum.
+    Servida pelo próprio app web (apps/web/public/cupons/<loja>.png)
+    porque o Telegram baixa imagem por URL pública (regra 5 do CLAUDE.md),
+    não por arquivo local."""
+    card_config = produto.get("card_config")
+    if not isinstance(card_config, dict) or not card_config.get("coupon_offer"):
+        return None
+    arquivo = CUPOM_IMAGEM_POR_FONTE.get(str(produto.get("source_name") or ""))
+    if not arquivo:
+        return None
+    base = os.environ.get("CANALTOPFY_PUBLIC_BASE_URL", "").rstrip("/")
+    if not base:
+        return None
+    return f"{base}/cupons/{arquivo}"
+
+
 def imagem_para_post(produto: dict[str, Any]) -> Optional[str]:
     """Imagem REAL do produto para compor o card do post — sem banco de
     imagens: usa a image_url já gravada se houver; senão captura og:image
-    da página pública da loja NA HORA da publicação (best-effort)."""
+    da página pública da loja NA HORA da publicação (best-effort). Campanha
+    de cupom usa o selo oficial da loja em vez da foto de produto — o que
+    está sendo anunciado é o próprio cupom, não um item específico."""
+    cupom = imagem_cupom_url(produto)
+    if cupom:
+        return cupom
     atual = (produto.get("image_url") or "").strip()
     if atual:
         return atual
@@ -672,6 +1047,9 @@ def publish_to_telegram(campaign_id: str, content_id: str,
         # mais simples e replicável, no formato usado pela concorrência.
         imagem_url = imagem_para_post(produto)
         copy = _load_content(content_id)
+        # Tambem cobre contents antigos que ja estavam na fila antes da
+        # introducao das hashtags; a funcao e idempotente para copies novas.
+        copy = aplicar_hashtags_produto(copy, produto)
         copy["cta"] = sortear_cta(campanha.get("organization_id"))
         resultado = publicar_oferta_telegram(
             copy=copy,
@@ -787,6 +1165,25 @@ def dispatch_queues(*, now: Optional[datetime] = None,
         if not itens or not grupos:
             continue
         item = itens[0]
+        first_product = ((item.get("campaign") or {}).get("product") or {})
+        if first_product:
+            previous_product = db.get_last_done_queue_product(fila["id"]) or {}
+            previous_family = category_family(
+                previous_product.get("category"), previous_product.get("title"))
+            if previous_family:
+                alternative = next((candidate for candidate in itens
+                    if category_family(
+                        ((candidate.get("campaign") or {}).get("product") or {}).get("category"),
+                        ((candidate.get("campaign") or {}).get("product") or {}).get("title"),
+                    ) != previous_family), None)
+                if alternative is None:
+                    db.register_audit(
+                        fila.get("organization_id"), actor_type="worker",
+                        action="fila_categoria_repetida_adiada",
+                        entity_type="queue", entity_id=str(fila["id"]),
+                        metadata={"category_family": previous_family})
+                    continue
+                item = alternative
         if not item.get("content_id"):
             db.mark_queue_item(item["id"], {
                 "status": "CANCELLED", "error": "item sem content_id"})

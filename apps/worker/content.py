@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
+import unicodedata
 import urllib.error
 import urllib.request
 from typing import Any, Optional
@@ -43,7 +45,133 @@ LOJA_LABEL = {
     "amazon": "Amazon",
     "mercadolivre": "Mercado Livre",
     "mercadolibre": "Mercado Livre",
+    "shopee": "Shopee",
 }
+
+# Conceitos pesquisaveis recorrentes. Cada regra usa apenas palavras que
+# aparecem no titulo real; alguns conceitos tambem acrescentam a categoria
+# natural do produto (iPhone -> celular), facilitando a busca no Telegram.
+_HASHTAG_CONCEITOS = (
+    (("iphone",), ("celular", "iphone")),
+    (("smartphone", "celular"), ("celular",)),
+    (("carregador", "carregamento"), ("carregador",)),
+    (("sem fio", "wireless"), ("semfio",)),
+    (("notebook", "laptop"), ("notebook",)),
+    (("smart tv", "smarttv"), ("smarttv", "tv")),
+    (("televisor", "televisao"), ("tv",)),
+    (("monitor",), ("monitor",)),
+    (("playstation", "ps5"), ("playstation", "ps5")),
+    (("xbox",), ("xbox",)),
+    (("nintendo",), ("nintendo",)),
+    (("gamer", "gaming"), ("gamer",)),
+    (("mouse",), ("mouse",)),
+    (("teclado",), ("teclado",)),
+    (("fone", "headphone", "earphone"), ("fone",)),
+    (("headset",), ("headset",)),
+    (("bluetooth",), ("bluetooth",)),
+    (("caixa de som",), ("caixadesom",)),
+    (("soundbar",), ("soundbar",)),
+    (("smartwatch", "relogio inteligente"), ("smartwatch",)),
+    (("tablet",), ("tablet",)),
+    (("ipad",), ("tablet", "ipad")),
+    (("camera",), ("camera",)),
+    (("roteador",), ("roteador",)),
+    (("wifi", "wi fi"), ("wifi",)),
+    (("ssd",), ("ssd",)),
+    (("impressora",), ("impressora",)),
+    (("air fryer", "airfryer", "fritadeira"), ("airfryer",)),
+    (("geladeira",), ("geladeira",)),
+    (("micro ondas", "microondas"), ("microondas",)),
+    (("aspirador",), ("aspirador",)),
+    (("ventilador",), ("ventilador",)),
+    (("ar condicionado",), ("arcondicionado",)),
+    (("cafeteira",), ("cafeteira",)),
+    (("liquidificador",), ("liquidificador",)),
+    (("furadeira",), ("furadeira",)),
+    (("parafusadeira",), ("parafusadeira",)),
+    (("serra",), ("serra",)),
+    (("cabo",), ("cabo",)),
+    (("adaptador",), ("adaptador",)),
+)
+
+_HASHTAG_MARCAS = (
+    "apple", "samsung", "xiaomi", "motorola", "lenovo", "philco",
+    "lg", "aoc", "makita", "wap", "gradiente", "sony", "jbl",
+    "asus", "acer", "dell", "hp", "electrolux", "brastemp",
+)
+
+_HASHTAG_STOPWORDS = {
+    "para", "com", "sem", "de", "da", "das", "do", "dos", "em",
+    "por", "e", "ou", "um", "uma", "kit", "novo", "nova", "modelo",
+    "cor", "tipo", "peca", "pecas", "premium", "profissional",
+    "original", "portatil", "bivolt", "produto",
+}
+
+MAX_HASHTAGS_PRODUTO = 6
+
+
+def _texto_ascii(texto: str) -> str:
+    normalizado = unicodedata.normalize("NFKD", texto.casefold())
+    sem_acentos = "".join(c for c in normalizado if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", " ", sem_acentos).strip()
+
+
+def hashtags_produto(product: dict[str, Any]) -> list[str]:
+    """Extrai hashtags curtas e honestas do titulo real do produto.
+
+    Prioriza tipo, compatibilidade e marca, remove acentos/repeticoes e
+    limita a quantidade para a legenda continuar legivel.
+    """
+    titulo = _texto_ascii(str(product.get("title") or ""))
+    if not titulo:
+        return []
+    titulo_delimitado = f" {titulo} "
+    encontradas: list[tuple[int, str]] = []
+
+    def adicionar(tag: str, posicao: int) -> None:
+        if tag not in {item[1] for item in encontradas}:
+            encontradas.append((posicao, tag))
+
+    for termos, tags in _HASHTAG_CONCEITOS:
+        posicoes = [titulo_delimitado.find(f" {termo} ") for termo in termos]
+        posicoes = [pos for pos in posicoes if pos >= 0]
+        if posicoes:
+            for tag in tags:
+                adicionar(tag, min(posicoes))
+
+    for marca in _HASHTAG_MARCAS:
+        posicao = titulo_delimitado.find(f" {marca} ")
+        if posicao >= 0:
+            adicionar(marca, posicao)
+
+    # Produto fora do dicionario: usa poucas palavras descritivas do proprio
+    # titulo, nunca termos promocionais genericos.
+    if len(encontradas) < 2:
+        for match in re.finditer(r"\b[a-z][a-z0-9]{3,}\b", titulo):
+            token = match.group(0)
+            if token not in _HASHTAG_STOPWORDS:
+                adicionar(token, match.start())
+            if len(encontradas) >= 3:
+                break
+
+    encontradas.sort(key=lambda item: item[0])
+    return [f"#{tag}" for _, tag in encontradas[:MAX_HASHTAGS_PRODUTO]]
+
+
+def aplicar_hashtags_produto(
+    copia: dict[str, Any], product: dict[str, Any]
+) -> dict[str, Any]:
+    """Acrescenta uma linha de hashtags e permanece idempotente."""
+    hashtags = hashtags_produto(product)
+    if not hashtags:
+        return copia
+    resultado = dict(copia)
+    body = str(resultado.get("body") or "").strip()
+    existentes = set(re.findall(r"(?<!\w)#[a-zA-Z0-9_]+", body.casefold()))
+    novas = [tag for tag in hashtags if tag.casefold() not in existentes]
+    if novas:
+        resultado["body"] = f"{body}\n\n{' '.join(novas)}".strip()
+    return resultado
 
 
 def _nome_loja(loja: Optional[str]) -> Optional[str]:
@@ -102,29 +230,17 @@ def _linha_desconto(product: dict[str, Any]) -> Optional[str]:
     original = product.get("original_price")
     if atual is None or original is None or original <= atual:
         return None
-    pct = round((1 - atual / original) * 100)
-    if pct <= 0:
+    pct_exato = (1 - atual / original) * 100
+    if pct_exato <= 0:
         return None
-    return f"🏷 -{pct}% (de {_fmt_preco(original)})"
-
-
-_SEPARADORES_SPEC = (" | ", " – ", " - ", ", ")
-
-
-def _linha_especificacoes(product: dict[str, Any]) -> Optional[str]:
-    """Linha "🔴 ... 🔴" no estilo minimalista dos canais de review — a
-    API das lojas não devolve especificação estruturada (só o título em
-    texto corrido), então a única aproximação honesta é reaproveitar o
-    próprio título quando ele já vier com partes separadas por vírgula/
-    hífen/barra; título "limpo" (sem separador) não gera essa linha —
-    nunca inventa um atributo técnico que não esteja no nome real."""
-    titulo = _nome(product)
-    for separador in _SEPARADORES_SPEC:
-        if separador in titulo:
-            partes = [p.strip() for p in titulo.split(separador) if p.strip()]
-            if len(partes) >= 2:
-                return "🔴 " + " | ".join(partes) + " 🔴"
-    return None
+    if (product.get("deal_highlight_reason") == "DISCOUNT_OVER_50"
+            and 50 < pct_exato < 51):
+        # Evita a contradição visual "mais de 50%" + "-50%" causada
+        # pelo arredondamento inteiro em descontos como 50,4%.
+        pct_text = f"{pct_exato:.1f}".replace(".", ",")
+    else:
+        pct_text = str(round(pct_exato))
+    return f"🏷 -{pct_text}% (de {_fmt_preco(original)})"
 
 
 def _linhas_cupom(product: dict[str, Any]) -> list[str]:
@@ -175,9 +291,6 @@ def _gerar_fallback(product: dict[str, Any], template_id: str, seed: Optional[in
                     loja: Optional[str] = None) -> dict[str, str]:
     rng = random.Random(seed)
     partes = []
-    spec = _linha_especificacoes(product)
-    if spec:
-        partes.append(spec)
     partes.extend(_linhas_cupom(product))
 
     linha_preco = _linha_preco(product)
@@ -199,6 +312,57 @@ def _gerar_fallback(product: dict[str, Any], template_id: str, seed: Optional[in
         "cta": rng.choice(_cta_variantes(product)),
         "disclaimer": DISCLAIMER_PADRAO,
     }
+
+
+def _aplicar_destaque_estoque_local(
+    copia: dict[str, Any], product: dict[str, Any]
+) -> dict[str, Any]:
+    """Inclui selo textual somente quando existe evidência explícita de BR."""
+    if str(product.get("local_stock_country") or "").upper() != "BR":
+        return copia
+    status = str(product.get("local_stock_status") or "").upper()
+    if status == "VERIFIED_API":
+        linha = "🇧🇷 ESTOQUE LOCAL NO BRASIL"
+    elif status == "DECLARED_TITLE":
+        linha = "🇧🇷 ESTOQUE NO BRASIL (informado no anúncio)"
+    else:
+        return copia
+
+    resultado = dict(copia)
+    body = str(resultado.get("body") or "").strip()
+    if linha.casefold() not in body.casefold():
+        resultado["body"] = f"{linha}\n\n{body}".strip()
+    return resultado
+
+
+def _aplicar_destaque_imperdivel(
+    copia: dict[str, Any], product: dict[str, Any]
+) -> dict[str, Any]:
+    """Destaque forte, sempre acompanhado da evidência que o autorizou."""
+    reason = str(product.get("deal_highlight_reason") or "")
+    if reason == "DISCOUNT_OVER_50":
+        evidence = "💥 MAIS DE 50% DE DESCONTO CONFIRMADO"
+    elif reason == "RECENT_LOW":
+        details = product.get("deal_highlight") or {}
+        days = int(details.get("lookback_days") or 30)
+        evidence = f"📉 MENOR PREÇO CONFIRMADO DOS ÚLTIMOS {days} DIAS"
+    else:
+        return copia
+
+    result = dict(copia)
+    headline = str(result.get("headline") or "").strip()
+    if "IMPERDÍVEL" not in headline.upper():
+        result["headline"] = f"🚨🔥 IMPERDÍVEL 🔥🚨 {headline}".strip()
+    body = str(result.get("body") or "").strip()
+    if evidence.casefold() not in body.casefold():
+        result["body"] = f"{evidence}\n\n{body}".strip()
+    return result
+
+
+def _aplicar_destaques(copia: dict[str, Any], product: dict[str, Any]) -> dict[str, Any]:
+    destacada = _aplicar_destaque_imperdivel(
+        _aplicar_destaque_estoque_local(copia, product), product)
+    return aplicar_hashtags_produto(destacada, product)
 
 
 def _openrouter_disponivel() -> bool:
@@ -232,17 +396,15 @@ def _gerar_openrouter(product: dict[str, Any], template_id: str,
         "esteja nos fatos ou no nome do produto.\n"
         "- body: linhas curtas separadas por quebra dupla, NESTA ordem "
         "(pule qualquer item sem dado real — nunca invente pra "
-        "preencher):\n"
-        "  1. \"🔴 <partes> 🔴\" com as partes separadas por \"|\" — SÓ "
-        "se o nome do produto já vier com partes separadas por vírgula/"
-        "hífen/barra que dê pra reaproveitar direto; nunca crie uma "
-        "especificação técnica que não esteja literalmente no nome.\n"
-        "  2. se os fatos tiverem cupom(ns): \"🎟 Cupom: CODIGO + Siga a "
+        "preencher); NÃO repita o nome do produto nem partes dele no "
+        "body — o nome completo já está na headline, então o body só "
+        "traz os fatos que faltam:\n"
+        "  1. se os fatos tiverem cupom(ns): \"🎟 Cupom: CODIGO + Siga a "
         "loja e resgate o cupom exclusivo\" (primeiro cupom) e \"🎟 ou "
         "CODIGO\" (demais, um por linha).\n"
-        "  3. \"💸 R$ <preço atual>\" (formato brasileiro, vírgula "
+        "  2. \"💸 R$ <preço atual>\" (formato brasileiro, vírgula "
         "decimal).\n"
-        "  4. se os fatos tiverem preço original maior que o atual: "
+        "  3. se os fatos tiverem preço original maior que o atual: "
         "\"🏷 -X% (de R$ <preço original>)\", com X calculado a partir "
         "dos dois preços reais dos fatos (nunca copiado de outro campo "
         "de desconto que não bata com a conta).\n"
@@ -305,22 +467,28 @@ def gerar_copy(
         raise ValueError(f"provider desconhecido: {provider!r}")
 
     if provider == "manual":
-        return {
+        return _aplicar_destaques({
             **(_gerar_fallback(product, template_id, seed, loja)),
             "provider": "manual",
             "model": None,
-        }
+        }, product)
 
     if provider == "auto" or provider == "openrouter":
         if _openrouter_disponivel():
             resultado = _gerar_openrouter(product, template_id, loja)
             if resultado and not validar_copy(resultado):
-                return {**resultado, "provider": "openrouter", "model": os.environ.get("OPENROUTER_MODEL")}
+                return _aplicar_destaques(
+                    {**resultado, "provider": "openrouter",
+                     "model": os.environ.get("OPENROUTER_MODEL")}, product)
         if provider == "openrouter":
             raise RuntimeError("openrouter não respondeu — use provider='auto' para fallback.")
-        return {**(_gerar_fallback(product, template_id, seed, loja)), "provider": "fallback", "model": None}
+        return _aplicar_destaques(
+            {**(_gerar_fallback(product, template_id, seed, loja)),
+             "provider": "fallback", "model": None}, product)
 
-    return {**(_gerar_fallback(product, template_id, seed, loja)), "provider": "fallback", "model": None}
+    return _aplicar_destaques(
+        {**(_gerar_fallback(product, template_id, seed, loja)),
+         "provider": "fallback", "model": None}, product)
 
 
 def validar_copy(copy: dict[str, Any]) -> list[str]:

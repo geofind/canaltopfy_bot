@@ -3,6 +3,24 @@
 Regra do spec: confirmar a API oficial ANTES de escrever integração; toda
 integração tem modo simulado + produção; nada publica sem autorização.
 
+## Mercado Livre — descoberta oficial supervisionada
+
+- `/trends/MLB` fornece termos em alta; o worker limita a quantidade e
+  atualiza essa fonte no maximo a cada 6 horas.
+- `/highlights/MLB/category/{CATEGORY_ID}` fornece os mais vendidos de uma
+  categoria-folha; o worker resolve somente entradas `ITEM` e `PRODUCT` por
+  endpoints oficiais e ignora `USER_PRODUCT` quando nao ha oferta publica
+  verificavel.
+- `/products/search` + `/products/{PRODUCT_ID}/items` localizam ofertas de
+  catalogo quando `/sites/MLB/search` responde 403.
+- `/sites/MLB/domain_discovery/search` restringe a busca ao dominio previsto
+  e evita homonimos, como um livro com "smartphone" no titulo.
+- `/items/{ITEM_ID}/sale_price?context=channel_marketplace` confirma o preco
+  vigente e o preco regular antes de calcular o desconto.
+- Limites por ciclo, deduplicacao por `external_id` e fallbacks de rede evitam
+  rajadas, duplicatas e descontos inventados. Nenhuma dessas etapas gera ou
+  valida comissao; o `meli.la` continua vindo do Link Builder oficial.
+
 ## VALIDADO AO VIVO (Fase 1)
 
 ### AliExpress Affiliate API — REAL

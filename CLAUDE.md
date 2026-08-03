@@ -21,8 +21,8 @@ com link de afiliado rastreado. MVP funcional, em pt-BR.
 - OAuth Mercado Livre completo: migração 0006 (ml_credentials), rota
   /callback (valida state em cookie httpOnly, troca code→token), action
   connectMercadoLivre, páginas /integracoes, /sistema, dashboard.
-- Publicação Telegram real: TELEGRAM_CHAT_ID=-1004362453366 (grupo "Canaltopfy -
-  Tech promo", bot @canaltopfy_bot é admin), sendPhoto+HTML, cards next/og.
+- Publicação Telegram real: TELEGRAM_CHAT_ID=-1004362453366 (grupo "Canal Topfy -
+  Tech Ofertas", bot @canaltopfy_bot é admin), sendPhoto+HTML, cards next/og.
 - Site de controle: /sistema (jobs, falhas, atividade do worker), /integracoes
   (ML conectar/desconectar, status Telegram), detalhe da campanha com
   cliques/conversões/comissão (últimos 20).

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ImageResponse } from "next/og";
 import { NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -95,13 +95,16 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const supabase = await createClient();
+  // O Telegram baixa o card sem cookies do usuário. Mantemos a credencial
+  // elevada apenas no servidor e limitamos a consulta a campanhas que já
+  // entraram no fluxo de publicação.
+  const supabase = createAdminClient();
 
   const { data: campanha } = await supabase
     .from("campaigns")
     .select("*, product:products(*)")
     .eq("id", id)
-    .eq("public_page", true)
+    .in("status", ["SCHEDULED", "PUBLISHED"])
     .maybeSingle();
 
   if (!campanha) {
@@ -115,7 +118,15 @@ export async function GET(
     discounted_price_brl: number | null;
     discount_pct: number | null;
     score: number | null;
-    card_config: { theme?: string; border?: boolean } | null;
+    card_config: {
+      theme?: string;
+      border?: boolean;
+      local_stock?: {
+        country?: string;
+        status?: "VERIFIED_API" | "DECLARED_TITLE";
+        evidence?: string;
+      };
+    } | null;
   } | null;
 
   const cardConfig = produto?.card_config ?? {};
@@ -148,6 +159,15 @@ export async function GET(
     produto?.score != null && produto.score > 0
       ? Math.round(produto.score)
       : null;
+  const localStock = cardConfig.local_stock;
+  const hasLocalStockBR =
+    localStock?.country === "BR" &&
+    (localStock.status === "VERIFIED_API" ||
+      localStock.status === "DECLARED_TITLE");
+  const localStockLabel =
+    localStock?.status === "VERIFIED_API"
+      ? "ESTOQUE LOCAL NO BRASIL"
+      : "BRASIL · INFORMADO NO ANÚNCIO";
 
   const pageUrl = `${req.nextUrl.origin}/c/${campanha.slug ?? ""}`;
 
@@ -203,22 +223,40 @@ export async function GET(
             oferta verificada
           </span>
         </div>
-        {score != null && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              padding: "10px 22px",
-              borderRadius: 999,
-              background: "rgba(251, 191, 36, 0.12)",
-              border: "1px solid rgba(251, 191, 36, 0.35)",
-            }}
-          >
-            <span style={{ fontSize: 24, fontWeight: 700, color: "#FBBF24" }}>
-              Topfy {score}
-            </span>
-          </div>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {hasLocalStockBR && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                padding: "10px 18px",
+                borderRadius: 999,
+                background: "rgba(34, 197, 94, 0.16)",
+                border: "1px solid rgba(74, 222, 128, 0.48)",
+              }}
+            >
+              <span style={{ fontSize: 19, fontWeight: 800, color: "#86EFAC" }}>
+                🇧🇷 {localStockLabel}
+              </span>
+            </div>
+          )}
+          {score != null && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                padding: "10px 22px",
+                borderRadius: 999,
+                background: "rgba(251, 191, 36, 0.12)",
+                border: "1px solid rgba(251, 191, 36, 0.35)",
+              }}
+            >
+              <span style={{ fontSize: 24, fontWeight: 700, color: "#FBBF24" }}>
+                Topfy {score}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       <div

@@ -15,6 +15,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,6 +31,39 @@ PRODUCT_ID_RE = re.compile(r"/item/(\d+)\.html")
 SHORTLINK_HOSTS = ("s.click.aliexpress.com", "a.aliexpress.com")
 PRODUCT_IDS_RE = re.compile(r"productIds=(\d+)")
 FALLBACK_ID_RE = re.compile(r"(\d{8,})")
+LOCAL_STOCK_TITLE_RE = re.compile(
+    r"\b(?:estoque\s+(?:no\s+)?brasil|armazem\s+(?:no\s+)?brasil|"
+    r"envio\s+(?:do|desde\s+o)\s+brasil|envio\s+nacional|"
+    r"pronta\s+entrega\s+(?:no\s+)?brasil|brazil\s+stock)\b",
+    re.IGNORECASE,
+)
+
+
+def _sem_acentos(value: Any) -> str:
+    return "".join(
+        char for char in unicodedata.normalize("NFKD", str(value or ""))
+        if not unicodedata.combining(char))
+
+
+def _detectar_estoque_local(bruto: dict[str, Any]) -> dict[str, str]:
+    """Evidência conservadora de origem BR; nunca usa prazo como atalho."""
+    for key in ("ship_from_country_code", "ship_from_country",
+                "warehouse_country_code", "warehouse_country"):
+        value = _sem_acentos(bruto.get(key)).strip().upper()
+        if value in ("BR", "BRA", "BRASIL", "BRAZIL"):
+            return {
+                "local_stock_country": "BR",
+                "local_stock_status": "VERIFIED_API",
+                "local_stock_evidence": f"AliExpress API: {key}=BR",
+            }
+    title = _sem_acentos(bruto.get("product_title"))
+    if LOCAL_STOCK_TITLE_RE.search(title):
+        return {
+            "local_stock_country": "BR",
+            "local_stock_status": "DECLARED_TITLE",
+            "local_stock_evidence": "Informado no título do anúncio",
+        }
+    return {}
 
 
 def _credenciais() -> Optional[tuple[str, str, Optional[str]]]:
@@ -119,6 +153,7 @@ def _parse_produto_api(bruto: dict[str, Any]) -> dict[str, Any]:
         "currency": bruto.get("target_sale_price_currency") or "BRL",
         "method": "API",
         "source_confidence": "VERIFIED",
+        **_detectar_estoque_local(bruto),
     }
 
 
@@ -221,7 +256,10 @@ class AliExpressConnector(MarketplaceConnector):
         campos["canonical_url"] = canonical
         return campos
 
-    def search_offers(self, query: str) -> list[dict[str, Any]]:
+    def search_offers(self, query: str, *, page_no: int = 1) -> list[dict[str, Any]]:
+        """page_no permite paginar (20 por página) — sem isso, ciclos
+        repetidos do modo automático sempre veem o mesmo topo do
+        resultado (já importado) e nunca acham produto novo."""
         creds = _credenciais()
         if creds is None:
             raise CredencialNaoConfigurada(
@@ -230,7 +268,7 @@ class AliExpressConnector(MarketplaceConnector):
         app_key, app_secret, tracking_id = creds
         resposta = _chamar_api(
             "aliexpress.affiliate.product.query", app_key, app_secret,
-            {"keywords": query, "page_no": "1", "page_size": "20",
+            {"keywords": query, "page_no": str(page_no), "page_size": "20",
              "target_currency": "BRL", "target_language": "PT",
              "tracking_id": tracking_id or ""})
         resp_result = resposta.get(

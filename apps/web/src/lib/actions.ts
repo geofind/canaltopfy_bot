@@ -11,10 +11,13 @@ const URL_PRODUTO = z.string().url().refine(
   (url) => url.includes("aliexpress.") ||
     url.includes("mercadolivre.") || url.includes("mercadolibre.") ||
     url.includes("meli.la") ||
-    url.includes("amazon.") || url.includes("amzn."),
+    url.includes("amazon.") || url.includes("amzn.") ||
+    url.includes("shopee.") || url.includes("shope.ee") ||
+    url.includes("magazinevoce.") || url.includes("magazineluiza.") ||
+    url.includes("magalu."),
   {
     message:
-      "Por enquanto aceitamos URLs da AliExpress, Mercado Livre (inclusive links curtos meli.la) ou Amazon (amzn.to também).",
+      "Aceitamos URLs da AliExpress, Mercado Livre, Amazon, Shopee e Magalu, inclusive os links curtos oficiais.",
   },
 );
 
@@ -43,6 +46,13 @@ function sourceNameFromUrl(url: string): string {
   }
   if (url.includes("amazon.") || url.includes("amzn.")) {
     return "amazon";
+  }
+  if (url.includes("shopee.") || url.includes("shope.ee")) {
+    return "shopee";
+  }
+  if (url.includes("magazinevoce.") || url.includes("magazineluiza.") ||
+      url.includes("magalu.")) {
+    return "magalu";
   }
   return "mercadolivre";
 }
@@ -626,6 +636,174 @@ export async function deleteQueue(queueId: string) {
   revalidatePath("/filas");
 }
 
+export async function updateQueueSourceMix(
+  queueId: string,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const mix = {
+    shopee_target_percent: Number(formData.get("shopee") ?? 0),
+    aliexpress_target_percent: Number(formData.get("aliexpress") ?? 0),
+    mercadolivre_target_percent: Number(formData.get("mercadolivre") ?? 0),
+    magalu_target_percent: Number(formData.get("magalu") ?? 0),
+  };
+  const values = Object.values(mix);
+  if (values.some((value) => !Number.isInteger(value) || value < 0 || value > 100)) {
+    return { error: "Use percentuais inteiros entre 0 e 100." };
+  }
+  if (values.reduce((sum, value) => sum + value, 0) !== 100) {
+    return { error: "Os percentuais precisam somar exatamente 100%." };
+  }
+
+  const { error } = await supabase
+    .from("queues")
+    .update({ ...mix, updated_at: new Date().toISOString() })
+    .eq("id", queueId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível salvar o mix da fila." };
+
+  revalidatePath("/filas");
+  revalidatePath("/");
+  return { ok: true };
+}
+
+export async function reorderQueueItems(
+  queueId: string,
+  orderedIds: string[],
+): Promise<CampaignActionState> {
+  const parsed = z.array(z.string().uuid()).min(1).max(200).safeParse(orderedIds);
+  if (!parsed.success || new Set(parsed.data).size !== parsed.data.length) {
+    return { error: "A ordem enviada é inválida. Recarregue a fila." };
+  }
+  const supabase = await createClient();
+  if (!(await getOrgId(supabase))) {
+    return { error: "Sessão expirada — entre novamente." };
+  }
+  const { error } = await supabase.rpc("reorder_queue_items", {
+    p_queue_id: queueId,
+    p_item_ids: parsed.data,
+  });
+  if (error) {
+    return { error: "A fila mudou durante a edição. Recarregue e tente novamente." };
+  }
+  revalidatePath("/filas");
+  revalidatePath("/");
+  return { ok: true };
+}
+
+export async function setQueueManualOrder(
+  queueId: string,
+  enabled: boolean,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const { error } = await supabase
+    .from("queues")
+    .update({ manual_order_locked: enabled, updated_at: new Date().toISOString() })
+    .eq("id", queueId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível alterar o modo de ordenação." };
+
+  revalidatePath("/filas");
+  return { ok: true };
+}
+
+export async function updateQueuedCampaignText(
+  queueItemId: string,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const title = String(formData.get("title") ?? "").trim();
+  const copyText = String(formData.get("copy_text") ?? "").trim();
+  if (title.length < 3 || title.length > 180) {
+    return { error: "O título precisa ter entre 3 e 180 caracteres." };
+  }
+  if (copyText.length < 10 || copyText.length > 5000) {
+    return { error: "A descrição precisa ter entre 10 e 5.000 caracteres." };
+  }
+
+  const { data: item } = await supabase
+    .from("queue_items")
+    .select("campaign_id, content_id, status")
+    .eq("id", queueItemId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (!item || item.status !== "PENDING" || !item.content_id) {
+    return { error: "Esta campanha já saiu da fila ou não pode mais ser editada." };
+  }
+
+  const [{ error: campaignError }, { error: contentError }] = await Promise.all([
+    supabase
+      .from("campaigns")
+      .update({ title, updated_at: new Date().toISOString() })
+      .eq("id", item.campaign_id)
+      .eq("organization_id", organizationId),
+    supabase
+      .from("contents")
+      .update({ copy_text: copyText, updated_at: new Date().toISOString() })
+      .eq("id", item.content_id)
+      .eq("campaign_id", item.campaign_id),
+  ]);
+  if (campaignError || contentError) {
+    return { error: "Não foi possível salvar o título e a descrição." };
+  }
+
+  revalidatePath("/filas");
+  revalidatePath(`/campanhas/${item.campaign_id}`);
+  return { ok: true };
+}
+
+export async function removeQueueItem(
+  queueItemId: string,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const { data: item } = await supabase
+    .from("queue_items")
+    .select("campaign_id, queue_id, status")
+    .eq("id", queueItemId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (!item || item.status !== "PENDING") {
+    return { error: "Esta campanha já saiu da fila e não pode ser removida." };
+  }
+  const { error } = await supabase
+    .from("queue_items")
+    .update({ status: "CANCELLED", error: null })
+    .eq("id", queueItemId)
+    .eq("status", "PENDING")
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível remover a campanha da fila." };
+
+  const { count } = await supabase
+    .from("queue_items")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", item.campaign_id)
+    .in("status", ["PENDING", "DISPATCHED"]);
+  if (!count) {
+    await supabase
+      .from("campaigns")
+      .update({ status: "APPROVED", updated_at: new Date().toISOString() })
+      .eq("id", item.campaign_id)
+      .eq("organization_id", organizationId);
+  }
+
+  revalidatePath("/filas");
+  revalidatePath("/");
+  revalidatePath(`/campanhas/${item.campaign_id}`);
+  return { ok: true };
+}
+
 export async function addToQueue(
   campaignId: string,
   contentId: string,
@@ -771,13 +949,31 @@ export async function updateCardConfig(
   formData: FormData,
 ): Promise<CampaignActionState> {
   const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) {
+    return { error: "Sessão expirada — entre novamente." };
+  }
   const theme = String(formData.get("theme") ?? "navy");
   const border = String(formData.get("border") ?? "off") === "on";
 
+  const { data: product, error: readError } = await supabase
+    .from("products")
+    .select("card_config")
+    .eq("id", productId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (readError || !product) {
+    return { error: "Produto não encontrado nesta organização." };
+  }
+  const currentConfig =
+    product.card_config && typeof product.card_config === "object"
+      ? product.card_config
+      : {};
   const { error } = await supabase
     .from("products")
-    .update({ card_config: { theme, border } })
-    .eq("id", productId);
+    .update({ card_config: { ...currentConfig, theme, border } })
+    .eq("id", productId)
+    .eq("organization_id", organizationId);
 
   if (error) {
     return { error: "Não foi possível salvar o card." };
@@ -815,4 +1011,354 @@ export async function deleteCtaPhrase(phraseId: string) {
   const supabase = await createClient();
   await supabase.from("cta_phrases").delete().eq("id", phraseId);
   revalidatePath("/gatilhos");
+}
+
+// ------------------------------------------------------------------
+// Laboratório de Captura (/campanhas): curadoria de categorias,
+// palavras-chave por fonte, corte de score e bloqueio de palavras que o
+// worker lê a cada ciclo de descoberta (db.get_capture_lab_config).
+// ------------------------------------------------------------------
+
+const DISCOVERY_SOURCES = ["aliexpress", "shopee", "mercadolivre", "magalu"] as const;
+
+const LOCK_DURATIONS_MS: Record<string, number> = {
+  "1h": 60 * 60 * 1000,
+  "6h": 6 * 60 * 60 * 1000,
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+};
+
+function slugifyFamilyKey(label: string): string {
+  return label
+    .normalize("NFKD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export async function updateDiscoveryMinScore(
+  _prev: CampaignActionState,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const minScore = Number(formData.get("min_score"));
+  if (!Number.isFinite(minScore) || minScore < 0 || minScore > 100) {
+    return { error: "O corte de score deve ficar entre 0 e 100." };
+  }
+
+  const { error } = await supabase.from("discovery_settings").upsert({
+    organization_id: organizationId,
+    min_score: minScore,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) return { error: "Não foi possível salvar o corte de score." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function upsertDiscoveryCategory(
+  _prev: CampaignActionState,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const label = String(formData.get("label") ?? "").trim();
+  if (label.length < 2 || label.length > 60) {
+    return { error: "Dê um nome de 2 a 60 caracteres para a categoria." };
+  }
+  const familyKey = slugifyFamilyKey(label);
+  if (!familyKey) {
+    return { error: "Esse nome não gera uma identificação válida — use letras ou números." };
+  }
+
+  const { error } = await supabase.from("discovery_categories").upsert(
+    { organization_id: organizationId, family_key: familyKey, label },
+    { onConflict: "organization_id,family_key", ignoreDuplicates: true },
+  );
+  if (error) return { error: "Não foi possível adicionar a categoria." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function toggleDiscoveryCategory(
+  categoryId: string,
+  active: boolean,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const { error } = await supabase
+    .from("discovery_categories")
+    .update({ active })
+    .eq("id", categoryId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível atualizar a categoria." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function setDiscoveryCategoryMinScore(
+  categoryId: string,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const raw = String(formData.get("min_score") ?? "").trim();
+  const minScore = raw === "" ? null : Number(raw);
+  if (minScore !== null && (!Number.isFinite(minScore) || minScore < 0 || minScore > 100)) {
+    return { error: "O corte da categoria deve ficar entre 0 e 100 (ou em branco)." };
+  }
+
+  const { error } = await supabase
+    .from("discovery_categories")
+    .update({ min_score: minScore })
+    .eq("id", categoryId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível salvar o corte da categoria." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function setDiscoveryCategoryTargetPercent(
+  categoryId: string,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const raw = String(formData.get("target_percent") ?? "").trim();
+  const targetPercent = raw === "" ? null : Number(raw);
+  if (
+    targetPercent !== null &&
+    (!Number.isInteger(targetPercent) || targetPercent < 0 || targetPercent > 100)
+  ) {
+    return { error: "A meta de distribuição deve ser um percentual inteiro entre 0 e 100." };
+  }
+
+  const { data: categories } = await supabase
+    .from("discovery_categories")
+    .select("id, target_percent")
+    .eq("organization_id", organizationId);
+  const otherTotal = (categories ?? [])
+    .filter((row) => row.id !== categoryId)
+    .reduce((sum, row) => sum + (row.target_percent ?? 0), 0);
+  if (otherTotal + (targetPercent ?? 0) > 100) {
+    return {
+      error: `As metas por categoria já somam ${otherTotal}% nas demais — reduza antes de adicionar mais.`,
+    };
+  }
+
+  const { error } = await supabase
+    .from("discovery_categories")
+    .update({ target_percent: targetPercent })
+    .eq("id", categoryId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível salvar a meta de distribuição." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function forceCaptureCategoryRedistribution(): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const { data: categories } = await supabase
+    .from("discovery_categories")
+    .select("target_percent")
+    .eq("organization_id", organizationId)
+    .not("target_percent", "is", null);
+  if (!categories || categories.length === 0) {
+    return { error: "Defina ao menos uma meta de distribuição por categoria antes de aplicar." };
+  }
+
+  const { data: queues } = await supabase
+    .from("queues")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("is_active", true);
+  if (!queues || queues.length === 0) {
+    return { error: "Nenhuma fila ativa para redistribuir." };
+  }
+
+  const { error } = await supabase.from("jobs").insert(
+    queues.map((queue) => ({
+      organization_id: organizationId,
+      type: "discovery.redistribute_categories",
+      payload: { queue_id: queue.id },
+    })),
+  );
+  if (error) return { error: "Não foi possível enfileirar a redistribuição." };
+
+  revalidatePath("/campanhas");
+  revalidatePath("/filas");
+  return { ok: true };
+}
+
+export async function lockDiscoveryCategory(
+  categoryId: string,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const duration = String(formData.get("duration") ?? "");
+  const durationMs = LOCK_DURATIONS_MS[duration];
+  if (!durationMs) {
+    return { error: "Escolha por quanto tempo pausar a categoria." };
+  }
+  const reason = String(formData.get("reason") ?? "").trim() || null;
+  const lockedUntil = new Date(Date.now() + durationMs).toISOString();
+
+  const { error } = await supabase
+    .from("discovery_categories")
+    .update({ locked_until: lockedUntil, locked_reason: reason })
+    .eq("id", categoryId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível travar a categoria." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function unlockDiscoveryCategory(
+  categoryId: string,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const { error } = await supabase
+    .from("discovery_categories")
+    .update({ locked_until: null, locked_reason: null })
+    .eq("id", categoryId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível reativar a categoria." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function addDiscoveryKeyword(
+  _prev: CampaignActionState,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const sourceName = String(formData.get("source_name") ?? "");
+  if (!DISCOVERY_SOURCES.includes(sourceName as (typeof DISCOVERY_SOURCES)[number])) {
+    return { error: "Fonte inválida." };
+  }
+  const term = String(formData.get("term") ?? "").trim();
+  if (term.length < 2 || term.length > 80) {
+    return { error: "A palavra-chave precisa ter de 2 a 80 caracteres." };
+  }
+
+  const { error } = await supabase.from("discovery_keywords").upsert(
+    { organization_id: organizationId, source_name: sourceName, term },
+    { onConflict: "organization_id,source_name,term", ignoreDuplicates: true },
+  );
+  if (error) return { error: "Não foi possível adicionar a palavra-chave." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function toggleDiscoveryKeyword(
+  keywordId: string,
+  active: boolean,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const { error } = await supabase
+    .from("discovery_keywords")
+    .update({ active })
+    .eq("id", keywordId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível atualizar a palavra-chave." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function removeDiscoveryKeyword(keywordId: string) {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return;
+  await supabase
+    .from("discovery_keywords")
+    .delete()
+    .eq("id", keywordId)
+    .eq("organization_id", organizationId);
+  revalidatePath("/campanhas");
+}
+
+export async function addDiscoveryBlockword(
+  _prev: CampaignActionState,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const term = String(formData.get("term") ?? "").trim();
+  if (term.length < 2 || term.length > 80) {
+    return { error: "A palavra bloqueada precisa ter de 2 a 80 caracteres." };
+  }
+  const reason = String(formData.get("reason") ?? "").trim() || null;
+  const isPermanent = String(formData.get("mode") ?? "permanent") === "permanent";
+
+  let expiresAt: string | null = null;
+  if (!isPermanent) {
+    const duration = String(formData.get("duration") ?? "");
+    const durationMs = LOCK_DURATIONS_MS[duration];
+    if (!durationMs) {
+      return { error: "Escolha por quanto tempo bloquear a palavra." };
+    }
+    expiresAt = new Date(Date.now() + durationMs).toISOString();
+  }
+
+  const { error } = await supabase.from("discovery_blocklist").insert({
+    organization_id: organizationId,
+    term,
+    is_permanent: isPermanent,
+    expires_at: expiresAt,
+    reason,
+  });
+  if (error) return { error: "Não foi possível bloquear a palavra." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function removeDiscoveryBlockword(blockId: string) {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return;
+  await supabase
+    .from("discovery_blocklist")
+    .delete()
+    .eq("id", blockId)
+    .eq("organization_id", organizationId);
+  revalidatePath("/campanhas");
 }

@@ -18,11 +18,16 @@ export const metadata: Metadata = {
     "Achados selecionados pelo CanalTopfy, com dados disponíveis de preço, desconto e loja.",
 };
 
+// Destino dos CTAs de Telegram: o GRUPO de ofertas (onde os posts saem),
+// não o bot (que só publica/administra o grupo, não é feito pra DM).
+const TELEGRAM_GROUP_URL = process.env.TELEGRAM_GROUP_URL || "https://t.me/topfy_tech";
+
 const LOJA_LABEL: Record<string, string> = {
   aliexpress: "AliExpress",
   amazon: "Amazon",
   mercadolivre: "Mercado Livre",
   mercadolibre: "Mercado Livre",
+  shopee: "Shopee",
 };
 
 const CARD_TONES = [
@@ -46,7 +51,27 @@ type ProdutoOferta = {
   discounted_price_brl: number | null;
   discount_pct: number | null;
   score: number | null;
+  card_config: Record<string, unknown> | null;
 };
+
+const CUPOM_IMAGEM_POR_FONTE: Record<string, string> = {
+  mercadolivre: "mercadolivre.png",
+  shopee: "shopee.png",
+  amazon: "amazon.png",
+};
+
+// Campanha de cupom (coupon_discovery.py) anuncia o próprio cupom, não um
+// produto — usa o selo oficial da loja em vez de uma foto de item.
+function cupomImagemUrl(
+  sourceName: string | null | undefined,
+  cardConfig: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!cardConfig || !("coupon_offer" in cardConfig)) {
+    return null;
+  }
+  const arquivo = sourceName ? CUPOM_IMAGEM_POR_FONTE[sourceName] : undefined;
+  return arquivo ? `/cupons/${arquivo}` : null;
+}
 
 type Oferta = {
   id: string;
@@ -95,6 +120,8 @@ function OfertaCard({
       ? Math.round(produto.score)
       : null;
   const titulo = produto?.title ?? oferta.title ?? "Oferta";
+  const cupomImagem = cupomImagemUrl(produto?.source_name, produto?.card_config);
+  const imagemExibida = cupomImagem ?? produto?.image_url;
 
   return (
     <Link
@@ -106,11 +133,11 @@ function OfertaCard({
           "relative aspect-[4/3] overflow-hidden rounded-[1.35rem] " + tone
         }
       >
-        {produto?.image_url ? (
+        {imagemExibida ? (
           // A origem das imagens varia por marketplace e é salva no banco.
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={produto.image_url}
+            src={imagemExibida}
             alt={titulo}
             className="h-full w-full object-contain p-5 transition-transform duration-500 group-hover:scale-[1.035] motion-reduce:transform-none"
           />
@@ -177,7 +204,7 @@ export default async function OfertasPage() {
   const { data } = await supabase
     .from("campaigns")
     .select(
-      "id, slug, title, status, product:products(source_name, title, image_url, category, original_price_brl, discounted_price_brl, discount_pct, score)",
+      "id, slug, title, status, product:products(source_name, title, image_url, category, original_price_brl, discounted_price_brl, discount_pct, score, card_config)",
     )
     .eq("public_page", true)
     .eq("status", "PUBLISHED")
@@ -247,7 +274,7 @@ export default async function OfertasPage() {
               </a>
             )}
             <Link
-              href="https://t.me/canaltopfy_bot"
+              href={TELEGRAM_GROUP_URL}
               target="_blank"
               rel="noreferrer"
               className="inline-flex h-11 items-center gap-2 rounded-full bg-[#1F2837] px-5 text-sm font-bold text-white transition-colors hover:bg-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
@@ -296,7 +323,7 @@ export default async function OfertasPage() {
               </a>
             )}
             <Link
-              href="https://t.me/canaltopfy_bot"
+              href={TELEGRAM_GROUP_URL}
               target="_blank"
               rel="noreferrer"
               className="inline-flex h-12 items-center rounded-full border border-[#1F2837]/15 bg-white px-6 text-sm font-bold transition-colors hover:border-[#1F2837]/35"
@@ -585,7 +612,7 @@ export default async function OfertasPage() {
             </p>
           </div>
           <Link
-            href="https://t.me/canaltopfy_bot"
+            href={TELEGRAM_GROUP_URL}
             target="_blank"
             rel="noreferrer"
             className="relative mt-7 inline-flex h-12 items-center gap-2 rounded-full bg-white px-6 text-sm font-bold text-primary transition-transform hover:-translate-y-0.5 lg:mt-0 motion-reduce:transform-none"

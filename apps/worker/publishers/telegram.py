@@ -81,6 +81,11 @@ def _chamar_api(metodo: str, payload: dict[str, Any], *,
         metodo, sleep_fn=sleep_fn)
 
 
+_USER_AGENT_NAVEGADOR = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+
+
 def _baixar_imagem(url: str, *, timeout: int = 20) -> Optional[bytes]:
     """Baixa a foto real do produto pra enviar como upload direto — o
     fetcher de URL do Telegram (sendPhoto com `photo` = URL) exige
@@ -88,11 +93,16 @@ def _baixar_imagem(url: str, *, timeout: int = 20) -> Optional[bytes]:
     e rejeita com 'wrong type of the web page content'. Sem "image/webp" no
     Accept de propósito (mesma razão do og/card: várias CDNs servem webp só
     quando o cliente diz que aceita; omitir garante jpeg/png, que o Telegram
-    aceita sem conversão). None = segue sem foto (sendMessage), nunca
-    derruba a publicação por isso."""
+    aceita sem conversão). User-Agent de navegador é necessário: confirmado
+    que a CDN de imagens da AliExpress (ae-pic-a1.aliexpress-media.com)
+    devolve 403 (bloqueio anti-bot) pro User-Agent padrão do urllib
+    ("Python-urllib/3.x") — foi a causa real de um post ter saído sem foto.
+    None = segue sem foto (sendMessage), nunca derruba a publicação por
+    isso."""
     try:
         req = urllib.request.Request(
-            url, headers={"Accept": "image/jpeg,image/png"})
+            url, headers={"Accept": "image/jpeg,image/png",
+                          "User-Agent": _USER_AGENT_NAVEGADOR})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
     except (urllib.error.URLError, urllib.error.HTTPError):

@@ -138,3 +138,36 @@
     color: var(--muted-foreground);
   }
 }
+
+@keyframes electric-flow {
+  to {
+    stroke-dashoffset: -56;
+  }
+}
+
+.electric-wire-base,
+.electric-wire-current {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.electric-wire-base {
+  stroke: rgba(255, 255, 255, 0.14);
+  stroke-width: 4;
+}
+
+.electric-wire-current {
+  stroke: #ff334f;
+  stroke-width: 2.5;
+  stroke-dasharray: 9 18;
+  filter: drop-shadow(0 0 4px rgba(255, 51, 79, 0.9));
+  animation: electric-flow 0.85s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .electric-wire-current {
+    animation: none;
+    stroke-dasharray: none;
+  }
+}

@@ -183,15 +183,91 @@ def get_last_dispatched_at(queue_id: str) -> Optional[str]:
 
 def get_pending_queue_items(queue_id: str, now_iso: str,
                             limit: int = 10) -> list[dict[str, Any]]:
-    resp = (_get().table("queue_items").select("*")
+    resp = (_get().table("queue_items")
+            .select("*, campaign:campaigns(product:products(category,title))")
             .eq("queue_id", queue_id).eq("status", "PENDING")
             .lte("scheduled_at", now_iso)
             .order("scheduled_at").limit(limit).execute())
     return resp.data or []
 
 
+def get_last_done_queue_product(queue_id: str) -> Optional[dict[str, Any]]:
+    """Produto do último item realmente concluído, para diversidade."""
+    resp = (_get().table("queue_items")
+            .select("campaign:campaigns(product:products(category,title))")
+            .eq("queue_id", queue_id).eq("status", "DONE")
+            .order("published_at", desc=True).limit(1).execute())
+    if not resp.data:
+        return None
+    campaign = resp.data[0].get("campaign") or {}
+    return campaign.get("product") or None
+
+
 def mark_queue_item(item_id: str, fields: dict[str, Any]) -> None:
     _get().table("queue_items").update(fields).eq("id", item_id).execute()
+
+
+def get_capture_lab_config(organization_id: str) -> dict[str, Any]:
+    """Configuração do Laboratório de Captura (categorias, palavras-chave,
+    bloqueio de palavras, corte de score) — tudo editável pela tela em
+    /campanhas. Cada seção falha isolada (tabela ainda não migrada, rede,
+    etc.) e nunca derruba o worker: sem dado, aquele pedaço volta vazio e o
+    chamador usa os defaults/env de sempre."""
+    config: dict[str, Any] = {
+        "min_score": None,
+        "categories": {},
+        "keywords_by_source": {},
+        "blocklist": [],
+    }
+    try:
+        settings = (_get().table("discovery_settings").select("min_score")
+                    .eq("organization_id", organization_id)
+                    .maybe_single().execute().data)
+        if settings and settings.get("min_score") is not None:
+            config["min_score"] = float(settings["min_score"])
+    except Exception:
+        pass
+    try:
+        categorias = (_get().table("discovery_categories")
+                      .select("family_key, active, min_score, locked_until, target_percent")
+                      .eq("organization_id", organization_id)
+                      .execute().data or [])
+        config["categories"] = {row["family_key"]: row for row in categorias}
+    except Exception:
+        pass
+    try:
+        termos = (_get().table("discovery_keywords").select("source_name, term")
+                  .eq("organization_id", organization_id)
+                  .eq("active", True).execute().data or [])
+        por_fonte: dict[str, list[str]] = {}
+        for linha in termos:
+            por_fonte.setdefault(linha["source_name"], []).append(linha["term"])
+        config["keywords_by_source"] = por_fonte
+    except Exception:
+        pass
+    try:
+        config["blocklist"] = (_get().table("discovery_blocklist")
+                               .select("term, expires_at")
+                               .eq("organization_id", organization_id)
+                               .execute().data or [])
+    except Exception:
+        pass
+    return config
+
+
+def get_discovery_keywords(organization_id: str, source_name: str) -> list[str]:
+    """Termos de busca ativos cadastrados pela tela pra essa fonte — somam-se
+    (nunca substituem) aos termos vindos de variável de ambiente em
+    main.py, então quem não usou a tela continua com o comportamento de
+    sempre."""
+    try:
+        resp = (_get().table("discovery_keywords").select("term")
+                .eq("organization_id", organization_id)
+                .eq("source_name", source_name)
+                .eq("active", True).execute())
+        return [row["term"] for row in (resp.data or []) if row.get("term")]
+    except Exception:
+        return []
 
 
 def register_audit(organization_id: Optional[str], *, actor_type: str,

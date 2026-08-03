@@ -10,6 +10,7 @@ const LOJA_LABEL: Record<string, string> = {
   amazon: "Amazon",
   mercadolivre: "Mercado Livre",
   mercadolibre: "Mercado Livre",
+  shopee: "Shopee",
 };
 
 function formatarPreco(v: number | null) {

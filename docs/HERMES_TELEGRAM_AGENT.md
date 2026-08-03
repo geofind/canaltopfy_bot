@@ -1,5 +1,8 @@
 # Hermes: Mercado Livre → Telegram
 
+O procedimento completo de implantação, diagnóstico e validação está em
+[`RUNBOOK_MERCADOLIVRE_TELEGRAM_E2E.md`](RUNBOOK_MERCADOLIVRE_TELEGRAM_E2E.md).
+
 Fluxo assistido no portal do Mercado Livre e automático dentro da Topfy.
 O Hermes opera apenas a etapa para a qual não existe API pública documentada:
 criar o link no Gerador oficial. Depois disso não há aprovação humana.
@@ -67,8 +70,24 @@ ML_DISCOVERY_TERMOS=air fryer,smartphone,notebook,ferramentas
 ML_DISCOVERY_MIN_DISCOUNT=10
 ML_DISCOVERY_MAX_NOVOS=10
 ML_DISCOVERY_INTERVAL_MINUTES=5
+ML_DISCOVERY_TERMS_PER_CYCLE=2
+ML_DISCOVERY_TRENDS_ENABLED=true
+ML_DISCOVERY_TREND_LIMIT=3
+ML_DISCOVERY_TREND_REFRESH_MINUTES=360
+ML_DISCOVERY_HIGHLIGHT_CATEGORIES=
+ML_DISCOVERY_HIGHLIGHT_LIMIT=5
+ML_DISCOVERY_HIGHLIGHT_REFRESH_MINUTES=60
+ML_DISCOVERY_MAX_PRICE_CHECKS=20
 CANALTOPFY_PUBLIC_BASE_URL=https://web-lac-seven-pg17eswj7d.vercel.app
 ```
+
+O ciclo de 5 minutos revalida apenas os candidatos necessarios. Tendencias
+sao atualizadas no maximo a cada 6 horas e rankings de mais vendidos a cada
+60 minutos. Isso evita rajadas na API. `ML_DISCOVERY_HIGHLIGHT_CATEGORIES`
+aceita IDs de categorias-folha separados por virgula; vazio desliga apenas
+essa fonte. O preco promocional e confirmado por `/sale_price` antes de a
+oportunidade ser gravada. Falha nessa confirmacao preserva o dado anterior,
+mas nunca cria um desconto inexistente.
 
 Também são necessários `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
 `TELEGRAM_BOT_TOKEN`, uma fila ativa vinculada ao grupo e apenas **uma réplica**
@@ -85,4 +104,3 @@ máquina ativa; Vercel hospeda a web, mas não mantém uma sessão de navegador.
 - CTA rastreável `/r/<publication_id>` que redireciona ao `meli.la`;
 - aviso de afiliado;
 - publicação via `sendPhoto`, com fallback seguro para texto sem preview.
-

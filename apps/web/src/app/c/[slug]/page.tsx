@@ -12,12 +12,32 @@ const LOJA_LABEL: Record<string, string> = {
   amazon: "Amazon",
   mercadolivre: "Mercado Livre",
   mercadolibre: "Mercado Livre",
+  shopee: "Shopee",
 };
 
 const brl = new Intl.NumberFormat("pt-BR", {
   style: "currency",
   currency: "BRL",
 });
+
+const CUPOM_IMAGEM_POR_FONTE: Record<string, string> = {
+  mercadolivre: "mercadolivre.png",
+  shopee: "shopee.png",
+  amazon: "amazon.png",
+};
+
+// Campanha de cupom (coupon_discovery.py) anuncia o próprio cupom, não um
+// produto — usa o selo oficial da loja em vez de uma foto de item.
+function cupomImagemUrl(
+  sourceName: string | null | undefined,
+  cardConfig: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!cardConfig || !("coupon_offer" in cardConfig)) {
+    return null;
+  }
+  const arquivo = sourceName ? CUPOM_IMAGEM_POR_FONTE[sourceName] : undefined;
+  return arquivo ? `/cupons/${arquivo}` : null;
+}
 
 export async function generateMetadata({
   params,
@@ -107,6 +127,7 @@ export default async function ShowcasePage({
     rating: number | null;
     seller: string | null;
     category: string | null;
+    card_config: Record<string, unknown> | null;
   } | null;
 
   const aprovado = conteudoAprovado?.copy_text
@@ -126,6 +147,8 @@ export default async function ShowcasePage({
     produto?.score != null && produto.score > 0
       ? Math.round(produto.score)
       : null;
+  const imagemExibida =
+    cupomImagemUrl(produto?.source_name, produto?.card_config) ?? produto?.image_url;
 
   const fatos = [
     preco != null ? `Preço atual: ${brl.format(preco)}` : null,
@@ -169,11 +192,11 @@ export default async function ShowcasePage({
           <section className="mx-auto w-full max-w-lg">
             <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-soft">
               <div className="relative aspect-square bg-muted">
-                {produto?.image_url ? (
+                {imagemExibida ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={produto.image_url}
-                    alt={produto.title ?? "Imagem do produto"}
+                    src={imagemExibida}
+                    alt={produto?.title ?? "Imagem do produto"}
                     className="h-full w-full object-cover"
                   />
                 ) : (

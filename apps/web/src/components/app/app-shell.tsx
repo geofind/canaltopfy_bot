@@ -10,7 +10,7 @@ import { signOut } from "@/lib/actions";
 
 const NAV_LINKS = [
   { href: "/", label: "Dashboard" },
-  { href: "/campanhas", label: "Campanhas" },
+  { href: "/campanhas", label: "Laboratório de Captura" },
   { href: "/campanhas/nova", label: "Nova campanha" },
   { href: "/sugestoes", label: "Sugestões do dia" },
   { href: "/grupos", label: "Grupos" },

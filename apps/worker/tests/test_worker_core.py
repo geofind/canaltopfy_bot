@@ -26,10 +26,11 @@ for chave in ("ALIEXPRESS_APP_KEY", "ALIEXPRESS_APP_SECRET",
 
 from scoring import PESO_MAXIMO, calcular_score  # noqa: E402
 from content import (gerar_copy, validar_copy, FRASES_PROIBIDAS,  # noqa: E402
+                     aplicar_hashtags_produto, hashtags_produto,
                      escolher_imagem_limpa)
 from adapters import (AmazonAdapter, WhatsAppAdapter, TikTokAdapter,  # noqa: E402
                       InstagramAdapter, YouTubeAdapter)
-from connectors.aliexpress import AliExpressConnector  # noqa: E402
+from connectors.aliexpress import AliExpressConnector, _parse_produto_api  # noqa: E402
 from connectors.mercadolivre import MercadoLivreConnector  # noqa: E402
 
 PRODUTO_VERIFIED = {
@@ -81,6 +82,33 @@ class ScoreTests(unittest.TestCase):
 
 
 class ContentTests(unittest.TestCase):
+    def test_hashtags_descrevem_tipo_marca_e_compatibilidade(self):
+        produto = {
+            "title": "Carregador sem fio Samsung 15W para celular iPhone 15"
+        }
+        hashtags = hashtags_produto(produto)
+        self.assertIn("#carregador", hashtags)
+        self.assertIn("#semfio", hashtags)
+        self.assertIn("#samsung", hashtags)
+        self.assertIn("#celular", hashtags)
+        self.assertIn("#iphone", hashtags)
+        self.assertLessEqual(len(hashtags), 6)
+
+    def test_hashtags_sao_adicionadas_uma_unica_vez(self):
+        produto = {"title": "Celular iPhone Apple"}
+        copia = {"body": "Oferta real"}
+        uma_vez = aplicar_hashtags_produto(copia, produto)
+        duas_vezes = aplicar_hashtags_produto(uma_vez, produto)
+        self.assertEqual(uma_vez, duas_vezes)
+        self.assertEqual(duas_vezes["body"].count("#iphone"), 1)
+
+    def test_copy_fallback_ja_sai_com_hashtags_pesquisaveis(self):
+        produto = dict(PRODUTO_VERIFIED, title="Mouse sem fio gamer Logitech")
+        copy = gerar_copy(produto, "oferta-padrao", provider="fallback", seed=1)
+        self.assertIn("#mouse", copy["body"])
+        self.assertIn("#semfio", copy["body"])
+        self.assertIn("#gamer", copy["body"])
+
     def test_copy_nunca_inventa_fato(self):
         for seed in range(10):
             copy = gerar_copy(PRODUTO_VERIFIED, "oferta-padrao",
@@ -160,18 +188,16 @@ class ContentTests(unittest.TestCase):
         copy = gerar_copy(produto, "oferta-padrao", provider="fallback", seed=1)
         self.assertNotIn("🏷", copy["body"])
 
-    def test_especificacoes_derivadas_do_titulo_com_separador(self):
-        """Sem dado estruturado real, a linha "🔴 ... 🔴" só existe quando
-        o próprio título já vier com partes separáveis (vírgula/hífen/
-        barra) — nunca inventa uma especificação técnica."""
+    def test_body_nao_repete_o_titulo_que_ja_esta_na_headline(self):
+        """Regressão: o body chegou a repetir o título inteiro numa linha
+        "🔴 ... 🔴" (derivada do próprio nome do produto) logo abaixo da
+        headline, que já mostra o título completo — informação duplicada
+        no mesmo post. O body só deve trazer o que falta (cupom/preço/
+        desconto), nunca o nome do produto de novo."""
         produto = dict(PRODUTO_VERIFIED, title="Mouse Sem Fio K7, Branco")
         copy = gerar_copy(produto, "oferta-padrao", provider="fallback", seed=1)
-        self.assertIn("🔴 Mouse Sem Fio K7 | Branco 🔴", copy["body"])
-
-    def test_titulo_sem_separador_nao_gera_linha_de_specs(self):
-        produto = dict(PRODUTO_VERIFIED, title="FoneBluetoothXYZ")
-        copy = gerar_copy(produto, "oferta-padrao", provider="fallback", seed=1)
         self.assertNotIn("🔴", copy["body"])
+        self.assertNotIn("Mouse Sem Fio K7", copy["body"])
 
     def test_disclaimer_e_o_texto_de_apoio_ao_canal(self):
         copy = gerar_copy(PRODUTO_VERIFIED, "oferta-padrao", provider="fallback", seed=1)
@@ -262,6 +288,31 @@ class AliExpressConnectorTests(unittest.TestCase):
         self.assertEqual(
             self.conector.normalize_url("https://pt.aliexpress.com/item/100500.html?spm=abc&x=1"),
             "https://pt.aliexpress.com/item/100500.html")
+
+    def test_estoque_br_confirmado_por_campo_explicito_da_api(self):
+        produto = _parse_produto_api({
+            "product_id": "1005001",
+            "product_title": "Mini PC",
+            "ship_from_country_code": "BR",
+        })
+        self.assertEqual(produto["local_stock_country"], "BR")
+        self.assertEqual(produto["local_stock_status"], "VERIFIED_API")
+
+    def test_estoque_br_declarado_no_titulo_fica_identificado(self):
+        produto = _parse_produto_api({
+            "product_id": "1005002",
+            "product_title": "Mini PC com estoque no Brasil",
+        })
+        self.assertEqual(produto["local_stock_country"], "BR")
+        self.assertEqual(produto["local_stock_status"], "DECLARED_TITLE")
+
+    def test_entrega_rapida_nao_e_tratada_como_estoque_local(self):
+        produto = _parse_produto_api({
+            "product_id": "1005003",
+            "product_title": "Mini PC com entrega rápida",
+            "delivery_time": "3 dias",
+        })
+        self.assertNotIn("local_stock_status", produto)
 
     def test_modo_manual_sem_rede(self):
         """Sem credencial, get_product devolve MANUAL/UNKNOWN sem rede."""

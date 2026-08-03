@@ -43,7 +43,7 @@ export function ChannelGroupForm() {
           id="name"
           name="name"
           required
-          placeholder="Grupo Tech Promo"
+          placeholder="Canal Topfy - Tech Ofertas"
           className={inputClass}
         />
       </div>

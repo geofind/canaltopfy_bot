@@ -1,300 +1,624 @@
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
-import { connectMercadoLivre } from "@/lib/actions";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { BadgeCheck, LineChart, Search, Send } from "lucide-react";
+  Activity,
+  ArrowUpRight,
+  BadgeCheck,
+  Boxes,
+  Clock3,
+  Layers3,
+  Radar,
+  Search,
+  ShieldCheck,
+  TicketCheck,
+  Zap,
+} from "lucide-react";
+import { createClient } from "@/lib/supabase/server";
+import { LiveCampaignFlow } from "@/components/app/live-campaign-flow";
+import { PublicationCountdown } from "@/components/app/publication-countdown";
 
-const STATUS_LABEL: Record<string, string> = {
-  IMPORTED: "Importado",
-  VALIDATING: "Validando",
-  READY: "Pronto",
-  CONTENT_GENERATING: "Gerando conteúdo",
-  REVIEW_REQUIRED: "Revisão",
-  APPROVED: "Aprovado",
-  SCHEDULED: "Agendado",
-  PUBLISHING: "Publicando",
-  PUBLISHED: "Publicado",
-  MONITORING: "Monitorando",
-  SCALE: "Escalando",
-  REWORK: "Revisar",
-  ARCHIVED: "Arquivado",
-  FAILED: "Falhou",
+export const dynamic = "force-dynamic";
+
+type JsonRecord = Record<string, unknown>;
+type Product = {
+  id?: string;
+  title?: string | null;
+  source_name?: string | null;
+  category?: string | null;
+  discount_pct?: number | null;
+  score?: number | null;
+  discounted_price_brl?: number | null;
+  collected_at?: string | null;
 };
+
+type Campaign = {
+  id: string;
+  status: string;
+  created_at: string;
+  product: Product | Product[] | null;
+};
+
+type QueueItem = {
+  id: string;
+  scheduled_at: string;
+  campaign: {
+    id?: string;
+    status?: string;
+    product?: Product | Product[] | null;
+  } | null;
+};
+
+function one<T>(value: T | T[] | null | undefined): T | null {
+  return Array.isArray(value) ? value[0] ?? null : value ?? null;
+}
+
+function numberValue(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function formatDuration(hours: number) {
+  const safeMinutes = Math.max(0, Math.round(hours * 60));
+  const h = Math.floor(safeMinutes / 60);
+  const m = safeMinutes % 60;
+  return `${h}h${String(m).padStart(2, "0")}`;
+}
+
+function formatMoney(value: number | null | undefined) {
+  if (value == null) return "Preço não informado";
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(Number(value));
+}
+
+function formatTime(value: string | Date) {
+  return new Date(value).toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  });
+}
+
+function formatFreshness(value: string | null | undefined) {
+  if (!value) return "Sem telemetria";
+  const minutes = Math.max(
+    0,
+    Math.round((Date.now() - new Date(value).getTime()) / 60_000),
+  );
+  if (minutes < 1) return "agora";
+  if (minutes < 60) return `há ${minutes} min`;
+  return `há ${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function sourceLabel(source: string | null | undefined) {
+  if (source === "mercadolivre") return "Mercado Livre";
+  if (source === "shopee") return "Shopee";
+  return "AliExpress";
+}
+
+function sourceColor(source: string | null | undefined) {
+  if (source === "mercadolivre") return "bg-[#FFE600]";
+  if (source === "shopee") return "bg-[#EE4D2D]";
+  return "bg-[#E52B37]";
+}
 
 export default async function DashboardPage() {
   const supabase = await createClient();
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
   const [
-    { count: totalCampanhas },
-    { count: publicadas },
-    { count: cliques },
-    { count: produtos },
-    { count: revisar },
-    { count: filaPendente },
-    { count: gruposAtivos },
+    { data: heartbeatRows },
+    { data: queueRows },
+    { data: campaignRows },
+    { count: activeCoupons },
+    { data: publicationRows },
+    { data: jobRows },
+    { data: eventRows },
+    { data: queueConfigRows },
   ] = await Promise.all([
-      supabase.from("campaigns").select("*", { count: "exact", head: true }),
-      supabase
-        .from("campaigns")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "PUBLISHED"),
-      supabase
-        .from("affiliate_clicks")
-        .select("*", { count: "exact", head: true }),
-      supabase.from("products").select("*", { count: "exact", head: true }),
-      supabase
-        .from("campaigns")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "REVIEW_REQUIRED"),
-      supabase
-        .from("queue_items")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "PENDING"),
-      supabase
-        .from("channel_groups")
-        .select("*", { count: "exact", head: true })
-        .eq("is_active", true),
-    ]);
+    supabase
+      .from("audit_log")
+      .select("created_at, entity_id, metadata")
+      .eq("action", "worker_heartbeat")
+      .order("created_at", { ascending: false })
+      .limit(1),
+    supabase
+      .from("queue_items")
+      .select(
+        "id, scheduled_at, campaign:campaigns(id, status, product:products(id, title, source_name, category, discount_pct, score, discounted_price_brl))",
+      )
+      .eq("status", "PENDING")
+      .order("scheduled_at", { ascending: true })
+      .limit(150),
+    supabase
+      .from("campaigns")
+      .select(
+        "id, status, created_at, product:products(id, title, source_name, category, discount_pct, score, discounted_price_brl, collected_at)",
+      )
+      .order("created_at", { ascending: false })
+      .limit(120),
+    supabase
+      .from("coupon_codes")
+      .select("*", { count: "exact", head: true })
+      .eq("is_active", true),
+    supabase
+      .from("publications")
+      .select("published_at, status")
+      .eq("status", "PUBLISHED")
+      .gte("published_at", oneDayAgo),
+    supabase
+      .from("jobs")
+      .select("status, created_at")
+      .order("created_at", { ascending: false })
+      .limit(100),
+    supabase
+      .from("audit_log")
+      .select("id, action, created_at, metadata")
+      .eq("actor_type", "worker")
+      .neq("action", "worker_heartbeat")
+      .order("created_at", { ascending: false })
+      .limit(12),
+    supabase
+      .from("queues")
+      .select("id, name, interval_minutes, is_active")
+      .eq("is_active", true)
+      .limit(1),
+  ]);
 
-  const { data: recentes } = await supabase
-    .from("campaigns")
-    .select("id, title, status, created_at")
-    .order("created_at", { ascending: false })
-    .limit(5);
+  const heartbeat = heartbeatRows?.[0] ?? null;
+  const config = (heartbeat?.metadata ?? {}) as JsonRecord;
+  const heartbeatAge = heartbeat
+    ? Date.now() - new Date(heartbeat.created_at).getTime()
+    : Number.POSITIVE_INFINITY;
+  const workerOnline = heartbeatAge <= 12 * 60 * 1000;
 
-  const { data: mlCred } = await supabase
-    .from("ml_credentials")
-    .select("expires_at")
-    .maybeSingle();
-  const mlConectado = Boolean(mlCred);
-  const mlExpirado =
-    mlCred && mlCred.expires_at && new Date(mlCred.expires_at) <= new Date();
+  const queueItems = (queueRows ?? []) as unknown as QueueItem[];
+  const campaigns = (campaignRows ?? []) as unknown as Campaign[];
+  const intervalMinutes = numberValue(
+    config.queue_interval_minutes,
+    numberValue(queueConfigRows?.[0]?.interval_minutes, 5),
+  );
+  const lastScheduled = queueItems.at(-1)?.scheduled_at;
+  const reserveHours = lastScheduled
+    ? Math.max(0, (new Date(lastScheduled).getTime() - Date.now()) / 3_600_000)
+    : (queueItems.length * intervalMinutes) / 60;
 
-  const etapas = [
-    {
-      nome: "Garimpar",
-      descricao: "Compare produtos pelo Topfy Score antes de criar campanha.",
-      valor: produtos ?? 0,
-      metrica: "produtos no radar",
-      href: "/sugestoes",
-      acao: "Ver sugestões",
-      icon: Search,
+  const queueBySource = queueItems.reduce(
+    (acc, item) => {
+      const product = one(one(item.campaign)?.product);
+      const source = product?.source_name === "mercadolivre"
+        ? "mercadolivre"
+        : product?.source_name === "shopee" ? "shopee" : "aliexpress";
+      acc[source] += 1;
+      return acc;
     },
-    {
-      nome: "Aprovar",
-      descricao: "Revise dados, copy e link antes de liberar qualquer envio.",
-      valor: revisar ?? 0,
-      metrica: "aguardando revisão",
-      href: "/campanhas",
-      acao: "Revisar campanhas",
-      icon: BadgeCheck,
-    },
-    {
-      nome: "Distribuir",
-      descricao: `Envie com intervalo e janela para ${gruposAtivos ?? 0} grupo${gruposAtivos === 1 ? "" : "s"} ativo${gruposAtivos === 1 ? "" : "s"}.`,
-      valor: filaPendente ?? 0,
-      metrica: "itens aguardando",
-      href: "/filas",
-      acao: "Gerenciar filas",
-      icon: Send,
-    },
-    {
-      nome: "Medir",
-      descricao: "Use sinais próprios para decidir o que manter, ajustar ou parar.",
-      valor: cliques ?? 0,
-      metrica: "cliques rastreados",
-      href: "/sistema",
-      acao: "Abrir monitoramento",
-      icon: LineChart,
-    },
-  ];
+    { aliexpress: 0, mercadolivre: 0, shopee: 0 },
+  );
+  const aliShare = queueItems.length
+    ? (queueBySource.aliexpress / queueItems.length) * 100
+    : 0;
+  const mlShare = queueItems.length
+    ? (queueBySource.mercadolivre / queueItems.length) * 100
+    : 0;
+  const shopeeShare = queueItems.length
+    ? (queueBySource.shopee / queueItems.length) * 100
+    : 0;
+
+  const recentOffers = campaigns
+    .map((campaign) => ({ campaign, product: one(campaign.product) }))
+    .filter(
+      (row): row is { campaign: Campaign; product: Product } =>
+        Boolean(row.product?.title && numberValue(row.product.discount_pct) > 0),
+    )
+    .sort(
+      (a, b) =>
+        numberValue(b.product.discount_pct) - numberValue(a.product.discount_pct),
+    )
+    .slice(0, 5);
+
+  const searchTerms = stringList(config.search_terms);
+  const mlTerms = stringList(config.ml_search_terms);
+  const mlCategories = stringList(config.ml_categories);
+  const searchTermCount = numberValue(config.search_terms_count, searchTerms.length);
+  const mlTermCount = numberValue(config.ml_search_terms_count, mlTerms.length);
+  const mlCategoryCount = numberValue(config.ml_categories_count, mlCategories.length);
+  const termsPerCycle = numberValue(config.ml_terms_per_cycle, 0);
+  const categoriesPerCycle = numberValue(config.ml_categories_per_cycle, 0);
+  const cycleMinutes = numberValue(config.ml_cycle_minutes, intervalMinutes);
+  const minScore = numberValue(config.min_score, 0);
+  const completedJobs = (jobRows ?? []).filter((job) => job.status === "done").length;
+  const failedJobs = (jobRows ?? []).filter((job) => job.status === "failed").length;
+  const nextQueueItem = queueItems[0] ?? null;
+  const nextCampaign = one(nextQueueItem?.campaign);
+  const nextProduct = one(nextCampaign?.product);
+  const nextPublicationEpochMs = nextQueueItem
+    ? new Date(nextQueueItem.scheduled_at).getTime()
+    : null;
+  const initialRemainingSeconds = nextPublicationEpochMs
+    ? Math.max(0, Math.ceil((nextPublicationEpochMs - Date.now()) / 1_000))
+    : 0;
+  const nextCampaignFlow =
+    nextQueueItem && nextCampaign?.id && nextProduct?.title
+      ? {
+          id: nextCampaign.id,
+          title: nextProduct.title,
+          source: sourceLabel(nextProduct.source_name),
+          scheduledTime: formatTime(nextQueueItem.scheduled_at),
+          isDue: new Date(nextQueueItem.scheduled_at).getTime() <= Date.now(),
+          priceLabel: formatMoney(nextProduct.discounted_price_brl),
+          score: Math.round(numberValue(nextProduct.score)),
+          discount: numberValue(nextProduct.discount_pct),
+        }
+      : null;
+
+  const overviewNav = [
+    ["#captacao", "Captação"],
+    ["#fila", "Fila"],
+    ["#achados", "Achados"],
+    ["#atividade", "Atividade"],
+  ] as const;
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <p className="eyebrow">Painel</p>
-          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-        </div>
-        <Link
-          href="/campanhas/nova"
-          className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-        >
-          Nova campanha
-        </Link>
-      </div>
-
-      <section className="overflow-hidden rounded-xl border border-[#34404f] bg-[#1F2837] text-white shadow-soft">
-        <div className="grid gap-8 border-b border-white/10 px-6 py-7 lg:grid-cols-[1fr_auto] lg:items-end lg:px-8">
-          <div className="max-w-2xl">
-            <p className="text-[9px] font-extrabold uppercase tracking-[2.5px] text-[#f03a50]">
-              Ciclo operacional
-            </p>
-            <h2 className="mt-2 font-display text-3xl font-bold tracking-tight">
-              Da oportunidade ao aprendizado, sem perder o controle.
-            </h2>
-            <p className="mt-3 text-sm leading-relaxed text-white/60">
-              O Topfy separa curadoria, aprovação, distribuição e resultado.
-              Automação executa; você decide o que entra e o que continua.
+    <div className="space-y-8 pb-10">
+      <header className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+        <div className="max-w-3xl">
+          <div className="flex items-center gap-2">
+            <span
+              className={`size-2.5 rounded-full ${workerOnline ? "bg-emerald-500 shadow-[0_0_0_5px_rgba(16,185,129,.12)]" : "bg-amber-500"}`}
+            />
+            <p className="eyebrow">
+              Motor {workerOnline ? "online" : "sem heartbeat recente"}
             </p>
           </div>
-          <Link
-            href="/campanhas/nova"
-            className="inline-flex h-10 items-center justify-center rounded-full bg-primary px-5 text-sm font-bold text-white transition-colors hover:bg-[#b81427]"
-          >
-            Começar por um produto
-          </Link>
+          <h1 className="mt-3 font-display text-4xl font-bold tracking-[-0.035em] sm:text-5xl">
+            Sala de controle das ofertas
+          </h1>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+            Captação, qualidade e reserva calculadas direto da operação. Cada
+            bloco leva ao detalhe que explica o número.
+          </p>
         </div>
+        <nav
+          aria-label="Seções do dashboard"
+          className="flex flex-wrap gap-2 rounded-xl border bg-white p-1.5 shadow-soft-sm"
+        >
+          {overviewNav.map(([href, label]) => (
+            <a
+              key={href}
+              href={href}
+              className="rounded-lg px-3 py-2 text-xs font-bold text-muted-foreground transition-colors hover:bg-[#1F2837] hover:text-white focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              {label}
+            </a>
+          ))}
+        </nav>
+      </header>
 
-        <div className="grid md:grid-cols-2 xl:grid-cols-4">
-          {etapas.map((etapa, index) => {
-            const Icon = etapa.icon;
-            return (
-              <Link
-                key={etapa.nome}
-                href={etapa.href}
-                className="group relative flex min-h-56 flex-col border-white/10 p-6 transition-colors hover:bg-white/[0.055] md:border-r md:[&:nth-child(2)]:border-r-0 xl:[&:nth-child(2)]:border-r xl:[&:last-child]:border-r-0"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-[10px] font-bold tracking-[2px] text-white/35">
-                    0{index + 1}
-                  </span>
-                  <Icon className="size-5 text-[#f03a50]" aria-hidden="true" />
-                </div>
-                <h3 className="mt-6 text-base font-bold">{etapa.nome}</h3>
-                <p className="mt-2 text-xs leading-relaxed text-white/52">
-                  {etapa.descricao}
+      <LiveCampaignFlow
+        nextCampaign={nextCampaignFlow}
+        workerOnline={workerOnline}
+        refreshedAtLabel={formatTime(new Date())}
+      />
+
+      <section className="overflow-hidden rounded-2xl bg-[#1F2837] text-white shadow-soft">
+        <div className="grid lg:grid-cols-[1.15fr_.85fr]">
+          <div className="relative overflow-hidden border-b border-white/10 p-7 sm:p-9 lg:border-b-0 lg:border-r">
+            <div className="absolute -right-24 -top-24 size-72 rounded-full border-[42px] border-[#D71931]/15" />
+            <div className="relative grid gap-7 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.24em] text-[#F65A6C]">
+                  Autonomia de publicação
                 </p>
-                <div className="mt-auto flex items-end justify-between gap-3 pt-6">
-                  <div>
-                    <p className="font-display text-3xl font-bold">{etapa.valor}</p>
-                    <p className="text-[10px] text-white/40">{etapa.metrica}</p>
+                <div className="mt-5 flex flex-wrap items-end gap-x-5 gap-y-2">
+                  <strong className="font-display text-7xl font-bold leading-none tracking-[-0.06em] sm:text-8xl">
+                    {formatDuration(reserveHours)}
+                  </strong>
+                  <div className="pb-2 text-sm text-white/55">
+                    <p>{queueItems.length} ofertas prontas</p>
+                    <p>intervalo de {intervalMinutes} minutos</p>
                   </div>
-                  <span className="text-xs font-semibold text-white/65 transition-colors group-hover:text-white">
-                    {etapa.acao} →
-                  </span>
                 </div>
-              </Link>
-            );
-          })}
+              </div>
+              <PublicationCountdown
+                targetEpochMs={nextPublicationEpochMs}
+                initialRemainingSeconds={initialRemainingSeconds}
+                scheduledTimeLabel={
+                  nextQueueItem ? formatTime(nextQueueItem.scheduled_at) : "—"
+                }
+                productTitle={nextProduct?.title ?? null}
+              />
+            </div>
+            <div className="relative mt-7 h-2 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full bg-[#D71931]"
+                style={{
+                  width: `${Math.min(100, (queueItems.length / Math.max(1, numberValue(config.queue_target_items, 96))) * 100)}%`,
+                }}
+              />
+            </div>
+            <div className="relative mt-3 flex justify-between text-[10px] text-white/40">
+              <span>gatilho {numberValue(config.queue_min_items, 84)} itens</span>
+              <span>alvo {numberValue(config.queue_target_items, 96)} itens</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2">
+            <div className="border-b border-r border-white/10 p-6">
+              <Activity className="size-5 text-emerald-400" aria-hidden="true" />
+              <p className="mt-5 text-2xl font-bold">
+                {workerOnline ? "Ativo" : "Atenção"}
+              </p>
+              <p className="mt-1 text-xs text-white/45">
+                PID {String(config.pid ?? heartbeat?.entity_id ?? "—")}
+              </p>
+            </div>
+            <div className="border-b border-white/10 p-6">
+              <Clock3 className="size-5 text-[#F65A6C]" aria-hidden="true" />
+              <p className="mt-5 text-2xl font-bold">{cycleMinutes} min</p>
+              <p className="mt-1 text-xs text-white/45">ritmo de descoberta</p>
+            </div>
+            <div className="border-r border-white/10 p-6">
+              <TicketCheck className="size-5 text-amber-300" aria-hidden="true" />
+              <p className="mt-5 text-2xl font-bold">{activeCoupons ?? 0}</p>
+              <p className="mt-1 text-xs text-white/45">cupons ativos verificados</p>
+            </div>
+            <div className="p-6">
+              <Zap className="size-5 text-sky-300" aria-hidden="true" />
+              <p className="mt-5 text-2xl font-bold">{publicationRows?.length ?? 0}</p>
+              <p className="mt-1 text-xs text-white/45">posts nas últimas 24h</p>
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 px-7 py-4 text-xs text-white/45 sm:px-9">
+          <span>Telemetria recebida {formatFreshness(heartbeat?.created_at)}</span>
+          <Link href="/sistema" className="font-bold text-white hover:text-[#F65A6C]">
+            Abrir diagnóstico <ArrowUpRight className="ml-1 inline size-3" />
+          </Link>
         </div>
       </section>
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Campanhas
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{totalCampanhas ?? 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Publicadas
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{publicadas ?? 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Cliques
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold">{cliques ?? 0}</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Mercado Livre</CardTitle>
-          <CardDescription>
-            Importação manual de produtos (automação é proibida pela
-            plataforma). Conecte a conta para importar links com seu código
-            de afiliado.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex items-center justify-between gap-4">
-          {mlConectado ? (
-            <Badge variant={mlExpirado ? "destructive" : "secondary"}>
-              {mlExpirado ? "Conectado (token expirado)" : "Conectado"}
-            </Badge>
-          ) : (
-            <Badge variant="outline">Não conectado</Badge>
-          )}
-          <form action={connectMercadoLivre}>
-            <button
-              type="submit"
-              className="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium transition-colors hover:bg-muted"
-            >
-              {mlConectado ? "Reconectar" : "Conectar"}
-            </button>
-          </form>
-        </CardContent>
-      </Card>
-
-      <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Campanhas recentes</h2>
-        {!recentes || recentes.length === 0 ? (
-          <Card>
-            <CardContent className="py-12 text-center text-sm text-muted-foreground">
-              Nenhuma campanha ainda — crie a primeira colando a URL de um
-              produto.
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="overflow-hidden rounded-md border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Título</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Criada em</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {recentes.map((c) => (
-                  <tr
-                    key={c.id}
-                    className="transition-colors hover:bg-muted/50"
-                  >
-                    <td className="px-4 py-3">
-                      <Link
-                        href={`/campanhas/${c.id}`}
-                        className="hover:underline"
-                      >
-                        {c.title || "Sem título"}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant="secondary">
-                        {STATUS_LABEL[c.status] ?? c.status}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {new Date(c.created_at).toLocaleDateString("pt-BR")}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <section id="captacao" className="scroll-mt-24 space-y-4">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <p className="eyebrow">Captação ampliada</p>
+            <h2 className="mt-1 text-xl font-bold">Onde o motor está procurando</h2>
           </div>
-        )}
+          <Link href="/sugestoes" className="text-xs font-bold text-primary hover:underline">
+            Ver sugestões encontradas →
+          </Link>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <details className="group rounded-xl border bg-white p-5 shadow-soft-sm open:ring-2 open:ring-primary/15">
+            <summary className="cursor-pointer list-none">
+              <Search className="size-5 text-primary" aria-hidden="true" />
+              <strong className="mt-5 block font-display text-4xl">{searchTermCount}</strong>
+              <span className="mt-1 block text-sm font-bold">termos no AliExpress</span>
+              <span className="mt-3 block text-xs leading-5 text-muted-foreground">
+                Embaralhados antes de cada reposição. Clique para navegar pelos termos.
+              </span>
+            </summary>
+            <div className="mt-4 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto border-t pt-4">
+              {searchTerms.map((term) => (
+                <span key={term} className="rounded-full bg-muted px-2.5 py-1 text-[10px] font-semibold">
+                  {term}
+                </span>
+              ))}
+            </div>
+          </details>
+
+          <details className="group rounded-xl border bg-white p-5 shadow-soft-sm open:ring-2 open:ring-primary/15">
+            <summary className="cursor-pointer list-none">
+              <Layers3 className="size-5 text-primary" aria-hidden="true" />
+              <strong className="mt-5 block font-display text-4xl">{mlCategoryCount}</strong>
+              <span className="mt-1 block text-sm font-bold">categorias Mercado Livre</span>
+              <span className="mt-3 block text-xs leading-5 text-muted-foreground">
+                Rotação de {categoriesPerCycle} categorias oficiais por rodada.
+              </span>
+            </summary>
+            <div className="mt-4 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto border-t pt-4">
+              {mlCategories.map((category) => (
+                <span key={category} className="rounded-full bg-[#FFF7B8] px-2.5 py-1 font-mono text-[10px] font-bold text-[#6B5B00]">
+                  {category}
+                </span>
+              ))}
+            </div>
+          </details>
+
+          <details className="group rounded-xl border bg-white p-5 shadow-soft-sm open:ring-2 open:ring-primary/15">
+            <summary className="cursor-pointer list-none">
+              <Radar className="size-5 text-primary" aria-hidden="true" />
+              <strong className="mt-5 block font-display text-4xl">{termsPerCycle}</strong>
+              <span className="mt-1 block text-sm font-bold">termos por ciclo</span>
+              <span className="mt-3 block text-xs leading-5 text-muted-foreground">
+                {mlTermCount} termos do Mercado Livre alternados a cada {cycleMinutes} minutos.
+              </span>
+            </summary>
+            <div className="mt-4 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto border-t pt-4">
+              {mlTerms.map((term) => (
+                <span key={term} className="rounded-full bg-muted px-2.5 py-1 text-[10px] font-semibold">
+                  {term}
+                </span>
+              ))}
+            </div>
+          </details>
+
+          <div className="rounded-xl border bg-[#FFF7F8] p-5 shadow-soft-sm">
+            <ShieldCheck className="size-5 text-primary" aria-hidden="true" />
+            <strong className="mt-5 block font-display text-4xl">{minScore}+</strong>
+            <span className="mt-1 block text-sm font-bold">Topfy Score mínimo</span>
+            <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+              <li>✓ desconto calculado com preços reais</li>
+              <li>✓ produto e link deduplicados</li>
+              <li>✓ categorias consecutivas bloqueadas</li>
+              <li>✓ cupom somente com código ativo</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="fila" className="scroll-mt-24 space-y-4">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <p className="eyebrow">Fila navegável</p>
+            <h2 className="mt-1 text-xl font-bold">Próximas ofertas no trilho</h2>
+          </div>
+          <Link href="/filas" className="text-xs font-bold text-primary hover:underline">
+            Gerenciar fila →
+          </Link>
+        </div>
+
+        <div className="rounded-2xl border bg-white p-5 shadow-soft-sm sm:p-7">
+          <div className="grid gap-7 lg:grid-cols-[1fr_280px]">
+            <div className="min-w-0">
+              <div className="flex h-14 items-center gap-2 overflow-x-auto rounded-xl bg-[#F0F2F5] px-4">
+                <span className="mr-1 shrink-0 text-[9px] font-black uppercase tracking-[.18em] text-muted-foreground">
+                  agora
+                </span>
+                <div className="h-px min-w-4 flex-1 bg-[#CBD0D8]" />
+                {queueItems.slice(0, 24).map((item, index) => {
+                  const campaign = one(item.campaign);
+                  const product = one(campaign?.product);
+                  return (
+                    <Link
+                      key={item.id}
+                      href={campaign?.id ? `/campanhas/${campaign.id}` : "/filas"}
+                      title={`${index + 1}. ${product?.title ?? "Oferta"} — ${new Date(item.scheduled_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`}
+                      className={`grid size-4 shrink-0 place-items-center rounded-full ring-4 ring-white transition-transform hover:scale-150 focus-visible:scale-150 ${sourceColor(product?.source_name)}`}
+                      aria-label={`Abrir próxima oferta ${index + 1}: ${product?.title ?? "sem título"}`}
+                    >
+                      <span className="size-1 rounded-full bg-black/20" />
+                    </Link>
+                  );
+                })}
+                <div className="h-px min-w-4 flex-1 bg-[#CBD0D8]" />
+                <span className="shrink-0 text-[9px] font-black uppercase tracking-[.18em] text-muted-foreground">
+                  +{formatDuration(reserveHours)}
+                </span>
+              </div>
+              <p className="mt-3 text-xs text-muted-foreground">
+                Passe o cursor sobre um ponto ou use Tab para ver e abrir a oferta. A sequência já incorpora score, fonte e diversidade de categoria.
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between text-xs font-bold">
+                <span>Mix das fontes</span>
+                <span>{queueItems.length} itens</span>
+              </div>
+              <div className="mt-3 flex h-3 overflow-hidden rounded-full bg-muted">
+                <div className="bg-[#E52B37]" style={{ width: `${aliShare}%` }} />
+                <div className="bg-[#FFE600]" style={{ width: `${mlShare}%` }} />
+                <div className="bg-[#EE4D2D]" style={{ width: `${shopeeShare}%` }} />
+              </div>
+              <div className="mt-3 flex flex-wrap justify-between gap-2 text-[10px] text-muted-foreground">
+                <span>AliExpress {queueBySource.aliexpress}</span>
+                <span>Mercado Livre {queueBySource.mercadolivre}</span>
+                <span>Shopee {queueBySource.shopee}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="achados" className="scroll-mt-24 space-y-4">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <p className="eyebrow">Dados atuais</p>
+            <h2 className="mt-1 text-xl font-bold">Maiores descontos encontrados</h2>
+          </div>
+          <Link href="/campanhas" className="text-xs font-bold text-primary hover:underline">
+            Todas as campanhas →
+          </Link>
+        </div>
+
+        <div className="overflow-hidden rounded-2xl border bg-white shadow-soft-sm">
+          {recentOffers.length ? (
+            recentOffers.map(({ campaign, product }, index) => (
+              <Link
+                key={campaign.id}
+                href={`/campanhas/${campaign.id}`}
+                className="group grid gap-3 border-b px-5 py-4 transition-colors last:border-b-0 hover:bg-[#FFF7F8] sm:grid-cols-[42px_1fr_auto_auto] sm:items-center"
+              >
+                <span className="font-mono text-xs font-bold text-muted-foreground">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold group-hover:text-primary">
+                    {product.title}
+                  </p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    {sourceLabel(product.source_name)} · score {Math.round(numberValue(product.score))} · {formatMoney(product.discounted_price_brl)}
+                  </p>
+                </div>
+                <span className="w-fit rounded-full bg-[#D71931] px-3 py-1 text-xs font-black text-white">
+                  -{numberValue(product.discount_pct).toFixed(2).replace(".", ",")}%
+                </span>
+                <ArrowUpRight className="hidden size-4 text-muted-foreground sm:block" aria-hidden="true" />
+              </Link>
+            ))
+          ) : (
+            <p className="p-10 text-center text-sm text-muted-foreground">
+              Nenhuma oferta com desconto confirmado foi encontrada ainda.
+            </p>
+          )}
+        </div>
+      </section>
+
+      <section id="atividade" className="scroll-mt-24 space-y-4">
+        <div>
+          <p className="eyebrow">Auditoria</p>
+          <h2 className="mt-1 text-xl font-bold">Atividade recente do motor</h2>
+        </div>
+        <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+          <div className="overflow-hidden rounded-2xl border bg-white shadow-soft-sm">
+            {(eventRows ?? []).map((event) => (
+              <div key={event.id} className="flex items-center gap-3 border-b px-5 py-3.5 last:border-b-0">
+                <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted">
+                  <Activity className="size-3.5 text-primary" aria-hidden="true" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-bold">{event.action.replaceAll("_", " ")}</p>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    {new Date(event.created_at).toLocaleString("pt-BR")}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-2xl border bg-white p-6 shadow-soft-sm">
+            <Boxes className="size-5 text-primary" aria-hidden="true" />
+            <h3 className="mt-5 text-sm font-bold">Últimos 100 jobs</h3>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <div className="rounded-xl bg-emerald-50 p-4">
+                <p className="font-display text-3xl font-bold text-emerald-700">{completedJobs}</p>
+                <p className="text-[10px] font-bold text-emerald-700/70">concluídos</p>
+              </div>
+              <div className="rounded-xl bg-red-50 p-4">
+                <p className="font-display text-3xl font-bold text-red-700">{failedJobs}</p>
+                <p className="text-[10px] font-bold text-red-700/70">falhas</p>
+              </div>
+            </div>
+            <Link href="/sistema" className="mt-5 inline-flex items-center text-xs font-bold text-primary hover:underline">
+              Examinar jobs e eventos <ArrowUpRight className="ml-1 size-3" />
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      <div className="flex flex-wrap gap-3 rounded-xl border border-dashed bg-white/55 p-4 text-xs text-muted-foreground">
+        <BadgeCheck className="size-4 text-emerald-600" aria-hidden="true" />
+        <span>Fonte: Supabase da organização autenticada.</span>
+        <span>•</span>
+        <span>Atualização: a cada abertura; heartbeat a cada 5 minutos.</span>
+        <span>•</span>
+        <span>Cupons sem código ativo nunca entram na copy.</span>
       </div>
     </div>
   );
