@@ -118,6 +118,23 @@ class RedistributeByCategoryTargetsTests(unittest.TestCase):
         resultado = redistribute_by_category_targets(itens, {"fones": 100})
         self.assertEqual(resultado, itens)
 
+    def test_categoria_real_chamada_outros_nao_colide_com_bucket_interno(self):
+        """Regressão: `redistribute_by_category_targets` usava a string
+        literal "outros" como chave interna do bucket "sem meta" — uma
+        categoria de verdade cadastrada pelo usuário com esse nome
+        (family_key "outros") ficava misturada com itens sem meta nenhuma.
+        Com a meta hoje só o item da família "outros" deve ser priorizado;
+        o item "sem-meta-nenhuma" cai no bucket interno."""
+        itens = [
+            {"id": "1", "category_family": "sem-meta-nenhuma"},
+            {"id": "2", "category_family": "outros"},
+            {"id": "3", "category_family": "sem-meta-nenhuma"},
+            {"id": "4", "category_family": "outros"},
+        ]
+        resultado = redistribute_by_category_targets(itens, {"outros": 100})
+        self.assertEqual({item["id"] for item in resultado}, {"1", "2", "3", "4"})
+        self.assertEqual(resultado[0]["category_family"], "outros")
+
 
 if __name__ == "__main__":
     unittest.main()

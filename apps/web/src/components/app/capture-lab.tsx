@@ -69,12 +69,17 @@ export type CaptureLabCandidate = {
   reason: string | null;
 };
 
+export type CaptureLabCategorySuggestion = {
+  familyKey: string;
+  label: string;
+};
+
 type CaptureLabProps = {
   minScore: number;
   categories: CaptureLabCategory[];
   keywords: CaptureLabKeyword[];
   blocklist: CaptureLabBlockword[];
-  suggestedCategories: string[];
+  suggestedCategories: CaptureLabCategorySuggestion[];
   candidates: CaptureLabCandidate[];
 };
 
@@ -95,6 +100,7 @@ const DURATIONS: { value: string; label: string }[] = [
 const APPROVED_ACTIONS = new Set([
   "auto_pipeline_aprovado",
   "mercadolivre_oferta_descoberta",
+  "campaign_aprovada",
 ]);
 
 const RANKING_PAGE_SIZE = 20;
@@ -114,6 +120,7 @@ function candidateReason(action: string, reason: string | null) {
   switch (action) {
     case "auto_pipeline_aprovado":
     case "mercadolivre_oferta_descoberta":
+    case "campaign_aprovada":
       return "Aprovado";
     case "auto_pipeline_rejeitado":
       return "Score abaixo do corte";
@@ -179,7 +186,7 @@ export function CaptureLab({
   function addCategory(formData: FormData) {
     startTransition(async () => {
       const result = await upsertDiscoveryCategory({}, formData);
-      report(result.error, "Categoria adicionada à curadoria.");
+      report(result.error, result.info ?? "Categoria adicionada à curadoria.");
     });
   }
 
@@ -239,7 +246,7 @@ export function CaptureLab({
   function addKeyword(formData: FormData) {
     startTransition(async () => {
       const result = await addDiscoveryKeyword({}, formData);
-      report(result.error, "Palavra-chave adicionada.");
+      report(result.error, result.info ?? "Palavra-chave adicionada.");
     });
   }
 
@@ -507,14 +514,15 @@ export function CaptureLab({
         {suggestedCategories.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span>Vistas recentemente, sem curadoria ainda:</span>
-            {suggestedCategories.map((raw) => (
-              <form key={raw} action={addCategory}>
-                <input type="hidden" name="label" value={raw} />
+            {suggestedCategories.map((suggestion) => (
+              <form key={suggestion.familyKey} action={addCategory}>
+                <input type="hidden" name="label" value={suggestion.label} />
+                <input type="hidden" name="family_key" value={suggestion.familyKey} />
                 <button
                   type="submit"
                   className="inline-flex items-center gap-1 rounded-full border bg-white px-2.5 py-1 transition-colors hover:border-primary hover:bg-[#FFF7F8]"
                 >
-                  <Plus className="size-3" /> {raw}
+                  <Plus className="size-3" /> {suggestion.label}
                 </button>
               </form>
             ))}

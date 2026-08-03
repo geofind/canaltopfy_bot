@@ -21,9 +21,15 @@ CACHE_DIR = Path(os.environ.get("IMAGE_CACHE_DIR") or
 
 
 def save(name: str, content: bytes) -> Path:
-    """Grava bytes no cache local; cria o diretório se preciso."""
+    """Grava bytes no cache local; cria o diretório se preciso.
+
+    `name` nunca é usado como caminho — só o nome de arquivo (`Path(name).name`)
+    é aceito, pra um `name` com "../" ou separador não escapar de CACHE_DIR."""
+    nome_seguro = Path(name).name
+    if not nome_seguro or nome_seguro in {".", ".."}:
+        raise ValueError(f"nome de arquivo inválido para o cache: {name!r}")
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    destino = CACHE_DIR / name
+    destino = CACHE_DIR / nome_seguro
     destino.write_bytes(content)
     return destino
 

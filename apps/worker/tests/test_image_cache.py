@@ -49,6 +49,24 @@ class ImageCacheTests(unittest.TestCase):
         self.assertGreaterEqual(resultado["free_bytes"], 0)
         self.assertIn("used_bytes", resultado)
 
+    def test_save_com_travessia_de_diretorio_grava_dentro_do_cache(self):
+        """Regressão: `name` nunca pode escapar de CACHE_DIR via "../" —
+        só o nome de arquivo final é usado, o resto do caminho é descartado."""
+        fora_do_cache = self.cache_dir.parent / "invasor.txt"
+        destino = image_cache.save("../../invasor.txt", b"dados")
+        self.assertEqual(destino, self.cache_dir / "invasor.txt")
+        self.assertFalse(fora_do_cache.exists())
+
+    def test_save_com_caminho_absoluto_grava_dentro_do_cache(self):
+        destino = image_cache.save("/etc/passwd", b"dados")
+        self.assertEqual(destino, self.cache_dir / "passwd")
+
+    def test_save_rejeita_nome_vazio_ou_apenas_pontos(self):
+        with self.assertRaises(ValueError):
+            image_cache.save("..", b"dados")
+        with self.assertRaises(ValueError):
+            image_cache.save("", b"dados")
+
 
 if __name__ == "__main__":
     unittest.main()

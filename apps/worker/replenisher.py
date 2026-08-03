@@ -587,6 +587,7 @@ def _request_hermes_links(config: ReplenisherConfig,
     links = response.json().get("links") or []
     allowed = {row["campaign_id"] for row in candidates}
     active_jobs = (db._get().table("jobs").select("payload")
+                   .eq("organization_id", config.organization_id)
                    .eq("type", "mercadolivre.link.ready")
                    .in_("status", ["pending", "running"])
                    .execute().data or [])

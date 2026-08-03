@@ -142,28 +142,34 @@ def avoid_consecutive_categories(
     return result
 
 
+# Sentinela por identidade (nunca por string) pro bucket "sem meta" —
+# family_key vem de texto digitado pelo usuário (/campanhas), então uma
+# categoria real chamada "outros" não pode colidir com o bucket interno.
+_SEM_META = object()
+
+
 def redistribute_by_category_targets(
     items: list[dict[str, Any]], targets: dict[str, int],
 ) -> list[dict[str, Any]]:
     """Intercala itens pelas metas de percentual por categoria definidas na
     curadoria do Laboratório de Captura (/campanhas) — categorias sem meta
-    somam numa faixa "outros" que preenche o restante. Preserva todos os
-    itens e a ordem interna de cada grupo; espera `item["category_family"]`
-    já calculado (mesmo padrão de `avoid_consecutive_categories`)."""
+    somam num bucket que preenche o restante. Preserva todos os itens e a
+    ordem interna de cada grupo; espera `item["category_family"]` já
+    calculado (mesmo padrão de `avoid_consecutive_categories`)."""
     managed = {key: max(0, min(100, int(value)))
               for key, value in targets.items() if value}
     if not managed:
         return list(items)
-    groups: dict[str, list[dict[str, Any]]] = {}
+    groups: dict[Any, list[dict[str, Any]]] = {}
     for item in items:
         family = item.get("category_family")
-        key = family if family in managed else "outros"
+        key = family if family in managed else _SEM_META
         groups.setdefault(key, []).append(item)
     if len(groups) < 2:
         return list(items)
 
-    desired = dict(managed)
-    desired["outros"] = max(0, 100 - sum(managed.values()))
+    desired: dict[Any, int] = dict(managed)
+    desired[_SEM_META] = max(0, 100 - sum(managed.values()))
     target_total = max(1, sum(desired.get(key, 0) for key in groups))
     used = {key: 0 for key in groups}
     result: list[dict[str, Any]] = []

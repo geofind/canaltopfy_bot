@@ -837,10 +837,12 @@ def approve_campaign(campaign_id: str, content_ids: list[str], *,
     db.update_campaign(campaign_id, {"status": "APPROVED"})
     for content_id in content_ids:
         db._get().table("contents").update({"status": "APPROVED"}).eq("id", content_id).execute()
+    campanha = db.get_campaign(campaign_id) or {}
     db.register_audit(
-        db.get_campaign(campaign_id).get("organization_id"),
+        campanha.get("organization_id"),
         actor_type=actor_type, action="campaign_aprovada",
-        entity_type="campaign", entity_id=campaign_id)
+        entity_type="campaign", entity_id=campaign_id,
+        metadata={"title": campanha.get("title")})
 
 
 ML_AFFILIATE_HOSTS = ("meli.la", "mercadolivre.com.br", "mercadolibre.com.br")
@@ -1176,14 +1178,19 @@ def dispatch_queues(*, now: Optional[datetime] = None,
                         ((candidate.get("campaign") or {}).get("product") or {}).get("category"),
                         ((candidate.get("campaign") or {}).get("product") or {}).get("title"),
                     ) != previous_family), None)
-                if alternative is None:
+                if alternative is not None:
+                    item = alternative
+                else:
+                    # Preferência de diversidade nunca pode virar trava: sem
+                    # alternativa nos próximos itens visíveis, publica mesmo
+                    # assim (repetir categoria é melhor que a fila parar de
+                    # publicar por tempo indeterminado — nada garante que um
+                    # item de outra categoria vai entrar antes deste).
                     db.register_audit(
                         fila.get("organization_id"), actor_type="worker",
-                        action="fila_categoria_repetida_adiada",
+                        action="fila_categoria_repetida_publicada_mesmo_assim",
                         entity_type="queue", entity_id=str(fila["id"]),
                         metadata={"category_family": previous_family})
-                    continue
-                item = alternative
         if not item.get("content_id"):
             db.mark_queue_item(item["id"], {
                 "status": "CANCELLED", "error": "item sem content_id"})

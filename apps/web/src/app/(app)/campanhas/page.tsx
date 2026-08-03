@@ -10,11 +10,13 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { apiFamilyKeyForCategory } from "@/lib/category-families";
 import { CaptureLab } from "@/components/app/capture-lab";
 import type {
   CaptureLabBlockword,
   CaptureLabCandidate,
   CaptureLabCategory,
+  CaptureLabCategorySuggestion,
   CaptureLabKeyword,
 } from "@/components/app/capture-lab";
 
@@ -46,6 +48,10 @@ const CAPTURE_LAB_ACTIONS = [
   "mercadolivre_oferta_descoberta",
   "mercadolivre_bloqueado_por_palavra",
   "mercadolivre_categoria_bloqueada",
+  // Aprovação pelo fluxo manual (import por URL, conclusão assistida do
+  // Mercado Livre) — sem isso, campanha aprovada fora do ciclo automático
+  // nunca aparecia em "Candidatos recentes".
+  "campaign_aprovada",
 ];
 
 const STATUS_BADGE: Record<string, string> = {
@@ -177,16 +183,18 @@ export default async function CampanhasPage({ searchParams }: CampanhasPageProps
     reason: row.reason,
   }));
 
-  const existingLabels = new Set(
-    captureCategories.map((category) => category.label.trim().toLowerCase()),
-  );
-  const suggestedCategories = Array.from(
-    new Set(
-      (recentCategoryRows ?? [])
-        .map((row) => (row.category ?? "").trim())
-        .filter((value) => value && !existingLabels.has(value.toLowerCase())),
-    ),
-  ).slice(0, 8);
+  const existingFamilyKeys = new Set(captureCategories.map((category) => category.familyKey));
+  const suggestedCategories: CaptureLabCategorySuggestion[] = [];
+  const seenFamilyKeys = new Set<string>();
+  for (const row of recentCategoryRows ?? []) {
+    const raw = (row.category ?? "").trim();
+    if (!raw) continue;
+    const { familyKey, label } = apiFamilyKeyForCategory(raw);
+    if (existingFamilyKeys.has(familyKey) || seenFamilyKeys.has(familyKey)) continue;
+    seenFamilyKeys.add(familyKey);
+    suggestedCategories.push({ familyKey, label });
+    if (suggestedCategories.length >= 8) break;
+  }
 
   const captureCandidates: CaptureLabCandidate[] = (auditRows ?? [])
     .map((row) => {

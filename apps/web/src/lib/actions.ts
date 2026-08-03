@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
+import { categoryFamilyForTerm } from "@/lib/category-families";
 
 const URL_PRODUTO = z.string().url().refine(
   (url) => url.includes("aliexpress.") ||
@@ -200,7 +201,7 @@ export async function disconnectMercadoLivre() {
   revalidatePath("/");
 }
 
-export type CampaignActionState = { error?: string; ok?: boolean };
+export type CampaignActionState = { error?: string; ok?: boolean; info?: string };
 
 export async function createCampaignFromUrl(
   _prev: CampaignActionState,
@@ -1091,16 +1092,47 @@ export async function upsertDiscoveryCategory(
   if (label.length < 2 || label.length > 60) {
     return { error: "Dê um nome de 2 a 60 caracteres para a categoria." };
   }
-  const familyKey = slugifyFamilyKey(label);
-  if (!familyKey) {
-    return { error: "Esse nome não gera uma identificação válida — use letras ou números." };
+
+  // Categoria vinda de uma sugestão (products.category real, já observado
+  // num produto capturado) já chega com a chave EXATA que offer_rules.
+  // category_family vai produzir pra esse leaf — usa direto, sem adivinhar.
+  const suggestedFamilyKey = String(formData.get("family_key") ?? "").trim();
+  let familyKey: string;
+  let finalLabel = label;
+  let info: string | undefined;
+
+  if (suggestedFamilyKey) {
+    familyKey = suggestedFamilyKey;
+  } else {
+    // Texto livre: só bate com a captura de verdade se coincidir com uma
+    // das famílias fixas do worker (offer_rules.CATEGORY_FAMILY_TERMS) —
+    // digitar um nome fora dessa lista nunca vai corresponder ao que o
+    // worker calcula (esse era o bug: slugificar o rótulo inteiro gerava
+    // uma chave que nunca aparece de verdade).
+    const known = categoryFamilyForTerm(label);
+    if (known) {
+      familyKey = known.family;
+      finalLabel = known.label;
+      if (known.label.toLowerCase() !== label.toLowerCase()) {
+        info = `Reconhecida como a categoria já existente "${known.label}".`;
+      }
+    } else {
+      familyKey = slugifyFamilyKey(label);
+      if (!familyKey) {
+        return { error: "Esse nome não gera uma identificação válida — use letras ou números." };
+      }
+      info = "Esse nome não corresponde a nenhuma categoria reconhecida ainda — " +
+        "prefira escolher pelas sugestões abaixo (baseadas em produtos já " +
+        "capturados) para garantir que o filtro realmente funcione.";
+    }
   }
 
   const { error } = await supabase.from("discovery_categories").upsert(
-    { organization_id: organizationId, family_key: familyKey, label },
+    { organization_id: organizationId, family_key: familyKey, label: finalLabel },
     { onConflict: "organization_id,family_key", ignoreDuplicates: true },
   );
   if (error) return { error: "Não foi possível adicionar a categoria." };
+  if (info) return { ok: true, info };
 
   revalidatePath("/campanhas");
   return { ok: true };
@@ -1296,8 +1328,33 @@ export async function addDiscoveryKeyword(
   );
   if (error) return { error: "Não foi possível adicionar a palavra-chave." };
 
+  // Garante que a categoria que essa palavra provavelmente vai acionar já
+  // apareça em "Categorias" pra curadoria, em vez de só surgir depois que
+  // o motor capturar um produto de verdade com ela.
+  const match = categoryFamilyForTerm(term);
+  let info: string;
+  if (match) {
+    const { data: existing } = await supabase
+      .from("discovery_categories")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("family_key", match.family)
+      .maybeSingle();
+    if (!existing) {
+      await supabase.from("discovery_categories").insert({
+        organization_id: organizationId,
+        family_key: match.family,
+        label: match.label,
+      });
+    }
+    info = `Palavra-chave adicionada — produtos encontrados com ela entram na categoria "${match.label}".`;
+  } else {
+    info = "Palavra-chave adicionada — ainda sem categoria fixa correspondente; " +
+      "aparece em \"Categorias\" (sugestões) assim que o motor capturar um produto com ela.";
+  }
+
   revalidatePath("/campanhas");
-  return { ok: true };
+  return { ok: true, info };
 }
 
 export async function toggleDiscoveryKeyword(

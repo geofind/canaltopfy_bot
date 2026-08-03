@@ -567,7 +567,11 @@ class DispatchQueuesTests(unittest.TestCase):
         self.assertEqual(publish.call_args.args[:2], ("c2", "co2"))
         self.assertEqual(mark.call_args_list[0].args[0], "i2")
 
-    def test_aguarda_quando_so_ha_mesma_categoria(self):
+    def test_publica_mesmo_com_categoria_repetida_pra_nao_travar_fila(self):
+        """A preferência de diversidade nunca pode virar trava: sem
+        alternativa de categoria entre os itens visíveis, a fila publica
+        mesmo assim (repetir é melhor que parar de publicar indefinidamente
+        — nada garante que outra categoria vai entrar na frente sozinha)."""
         fila = self._fila(organization_id="org1")
         item = {"id": "i1", "campaign_id": "c1", "content_id": "co1",
                 "attempts": 0, "campaign": {"product": {
@@ -578,12 +582,20 @@ class DispatchQueuesTests(unittest.TestCase):
              mock.patch.object(db, "get_last_done_queue_product", return_value={
                  "category": "Acessórios", "title": "Carregador rápido"}), \
              mock.patch.object(db, "get_queue_groups", return_value=[{"group_id": "g1"}]), \
-             mock.patch.object(db, "register_audit"), \
-             mock.patch.object(pipeline, "publish_to_telegram") as publish:
+             mock.patch.object(db, "mark_queue_item") as mark, \
+             mock.patch.object(db, "register_audit") as audit, \
+             mock.patch.object(pipeline, "publish_to_telegram",
+                               return_value={"publication_id": "p1"}) as publish:
             result = pipeline.dispatch_queues(
                 now=datetime(2026, 8, 2, 17, tzinfo=timezone.utc))
-        self.assertEqual(result, [])
-        publish.assert_not_called()
+        self.assertEqual(len(result), 1)
+        publish.assert_called_once()
+        self.assertEqual(publish.call_args.args[:2], ("c1", "co1"))
+        self.assertEqual(mark.call_args_list[0].args[0], "i1")
+        audit.assert_called_once()
+        self.assertEqual(
+            audit.call_args.kwargs["action"],
+            "fila_categoria_repetida_publicada_mesmo_assim")
 
     def test_sem_janela_despacha_de_madrugada_24h(self):
         """Fila sem window_start/window_end (24h) tem que despachar em
