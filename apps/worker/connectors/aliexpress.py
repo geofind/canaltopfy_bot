@@ -270,7 +270,13 @@ class AliExpressConnector(MarketplaceConnector):
             "aliexpress.affiliate.product.query", app_key, app_secret,
             {"keywords": query, "page_no": str(page_no), "page_size": "20",
              "target_currency": "BRL", "target_language": "PT",
-             "tracking_id": tracking_id or ""})
+             "tracking_id": tracking_id or "",
+             # Só produto que a API confirma enviar pro Brasil, ordenado
+             # pelo volume de vendas (campo oficial "sort" da Affiliate
+             # API) — pedido do usuário: focar em mais vendidos que
+             # entregam no Brasil. Avaliação já é filtrada depois pelo
+             # Topfy Score (dimensão "avaliação" usa evaluate_rate).
+             "ship_to_country": "BR", "sort": "LAST_VOLUME_DESC"})
         resp_result = resposta.get(
             "aliexpress_affiliate_product_query_response", {}).get("resp_result", {})
         if resp_result.get("resp_code") != 200:
