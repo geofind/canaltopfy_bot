@@ -80,6 +80,24 @@ class ScoreTests(unittest.TestCase):
         score = calcular_score(produto, LINK_VERIFIED)
         self.assertLess(score["confiabilidade"], 5.0)
 
+    def test_categoria_priorizada_reforca_peso_de_vendas(self):
+        """Laboratório de Captura (/campanhas): categoria marcada como
+        prioridade de mais vendidos dobra o teto da dimensão vendas sem
+        mudar PESO_MAXIMO (spec aprovado) pras demais categorias."""
+        produto = dict(PRODUTO_VERIFIED, sold_count=50000)
+        normal = calcular_score(produto, LINK_VERIFIED)
+        priorizado = calcular_score(
+            produto, LINK_VERIFIED, prioritize_bestsellers=True)
+        self.assertEqual(normal["vendas"], PESO_MAXIMO["vendas"])
+        self.assertGreater(priorizado["vendas"], normal["vendas"])
+        self.assertGreater(priorizado["score_total"], normal["score_total"])
+
+    def test_sem_vendas_confirmadas_prioridade_nao_inventa_pontos(self):
+        produto = dict(PRODUTO_VERIFIED, sold_count=None)
+        score = calcular_score(
+            produto, LINK_VERIFIED, prioritize_bestsellers=True)
+        self.assertEqual(score["vendas"], 0.0)
+
 
 class ContentTests(unittest.TestCase):
     def test_hashtags_descrevem_tipo_marca_e_compatibilidade(self):

@@ -1223,6 +1223,50 @@ export async function setDiscoveryCategoryTargetPercent(
   return { ok: true };
 }
 
+export async function toggleDiscoveryCategoryBestsellerPriority(
+  categoryId: string,
+  prioritizeBestsellers: boolean,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const { error } = await supabase
+    .from("discovery_categories")
+    .update({ prioritize_bestsellers: prioritizeBestsellers })
+    .eq("id", categoryId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível atualizar a prioridade de mais vendidos." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function setDiscoveryCategoryMlId(
+  categoryId: string,
+  formData: FormData,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const raw = String(formData.get("ml_category_id") ?? "").trim().toUpperCase();
+  const mlCategoryId = raw === "" ? null : raw;
+  if (mlCategoryId !== null && !/^MLB\d+$/.test(mlCategoryId)) {
+    return { error: 'ID de categoria do Mercado Livre inválido — use o formato "MLB1055".' };
+  }
+
+  const { error } = await supabase
+    .from("discovery_categories")
+    .update({ ml_category_id: mlCategoryId })
+    .eq("id", categoryId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível salvar a categoria do Mercado Livre." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
 export async function forceCaptureCategoryRedistribution(): Promise<CampaignActionState> {
   const supabase = await createClient();
   const organizationId = await getOrgId(supabase);

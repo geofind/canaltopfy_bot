@@ -123,6 +123,30 @@ def category_lock_reason(config: Optional[dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def ml_highlight_category_ids(
+    categories: Iterable[dict[str, Any]],
+) -> list[str]:
+    """IDs de categoria MLB (ex.: "MLB1055") das linhas de
+    `discovery_categories` marcadas para priorizar mais vendidos —
+    somam-se (nunca substituem) à lista de categorias de "mais vendidos"
+    vinda de variável de ambiente (main.py). Ignora categoria
+    pausada/travada (mesma regra de `category_lock_reason`) e valores que
+    não têm cara de ID oficial do Mercado Livre."""
+    ids: list[str] = []
+    vistos: set[str] = set()
+    for config in categories:
+        if not config.get("prioritize_bestsellers"):
+            continue
+        if category_lock_reason(config):
+            continue
+        categoria_id = str(config.get("ml_category_id") or "").strip().upper()
+        if categoria_id in vistos or not re.fullmatch(r"MLB\d+", categoria_id):
+            continue
+        vistos.add(categoria_id)
+        ids.append(categoria_id)
+    return ids
+
+
 def avoid_consecutive_categories(
     items: list[dict[str, Any]], *, previous_family: Optional[str] = None
 ) -> list[dict[str, Any]]:

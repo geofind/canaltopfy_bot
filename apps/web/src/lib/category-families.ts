@@ -50,14 +50,19 @@ export function categoryFamilyForTerm(term: string): { family: string; label: st
   return null;
 }
 
-// Espelha o fallback de apps/worker/offer_rules.py:category_family quando
-// nenhuma família fixa bate: pega o último segmento do caminho de
-// categoria da fonte (separado por ">") e normaliza com ESPAÇO (não
-// hífen) — é assim que o worker gera a chave "api:<folha>" de verdade.
-// Usado só quando o usuário adiciona uma categoria a partir de uma
-// sugestão baseada em produto já capturado (products.category real),
-// nunca para texto livre digitado à mão.
+// Espelha apps/worker/offer_rules.py:category_family: testa a categoria
+// bruta contra as famílias fixas ANTES de cair no fallback "api:<folha>"
+// — mesma ordem de prioridade do Python (família fixa bate em cima do
+// texto combinado; só sem nenhuma família fixa é que o último segmento do
+// caminho, separado por ">", normalizado com ESPAÇO (não hífen), vira a
+// chave "api:<folha>"). Usado quando o usuário adiciona uma categoria a
+// partir de uma sugestão baseada em produto já capturado (products.category
+// real), nunca para texto livre digitado à mão.
 export function apiFamilyKeyForCategory(category: string): { familyKey: string; label: string } {
+  const conhecida = categoryFamilyForTerm(category);
+  if (conhecida) {
+    return { familyKey: conhecida.family, label: conhecida.label };
+  }
   const parts = category
     .split(/\s*>\s*/)
     .map((part) => part.trim())

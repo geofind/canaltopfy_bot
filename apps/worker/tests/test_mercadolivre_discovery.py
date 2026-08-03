@@ -450,6 +450,29 @@ class ReabastecedorMesclaPalavrasChaveTests(unittest.TestCase):
         thread_instance.start.assert_called_once()
 
 
+class CategoriasMlComBancoTests(unittest.TestCase):
+    """Laboratório de Captura (/campanhas): categoria marcada como
+    prioridade de mais vendidos soma sua categoria MLB à lista de
+    "mais vendidos" configurada por variável de ambiente."""
+
+    def test_soma_categorias_da_curadoria_sem_duplicar(self):
+        with mock.patch.object(
+                worker_main.db, "get_ml_highlight_category_ids",
+                return_value=["MLB1055", "MLB1132"]) as buscar:
+            resultado = worker_main._categorias_ml_com_banco(
+                "org-1", ["MLB1055"])
+        buscar.assert_called_once_with("org-1")
+        self.assertEqual(resultado, ["MLB1055", "MLB1132"])
+
+    def test_sem_categoria_extra_devolve_so_o_env(self):
+        with mock.patch.object(
+                worker_main.db, "get_ml_highlight_category_ids",
+                return_value=[]):
+            resultado = worker_main._categorias_ml_com_banco(
+                "org-1", ["MLB432825"])
+        self.assertEqual(resultado, ["MLB432825"])
+
+
 class ProcessJobForceAlignMixTests(unittest.TestCase):
     """Botão "Forçar mix agora" em /filas: enfileira um job que roda um
     ciclo do reabastecedor com ajuste maior, pra convergir a fila pra

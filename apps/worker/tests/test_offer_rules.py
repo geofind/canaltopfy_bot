@@ -12,6 +12,7 @@ if str(WORKER_DIR) not in sys.path:
     sys.path.insert(0, str(WORKER_DIR))
 
 from offer_rules import (category_lock_reason, is_blocked_by_word,  # noqa: E402
+                         ml_highlight_category_ids,
                          redistribute_by_category_targets)
 
 
@@ -134,6 +135,43 @@ class RedistributeByCategoryTargetsTests(unittest.TestCase):
         resultado = redistribute_by_category_targets(itens, {"outros": 100})
         self.assertEqual({item["id"] for item in resultado}, {"1", "2", "3", "4"})
         self.assertEqual(resultado[0]["category_family"], "outros")
+
+
+class MlHighlightCategoryIdsTests(unittest.TestCase):
+    """Laboratório de Captura (/campanhas): categoria marcada para
+    priorizar mais vendidos soma sua categoria MLB à busca de highlights
+    do Mercado Livre (main.py)."""
+
+    def test_ignora_categoria_sem_flag(self):
+        self.assertEqual(ml_highlight_category_ids(
+            [{"prioritize_bestsellers": False, "ml_category_id": "MLB1055"}]), [])
+
+    def test_devolve_id_de_categoria_priorizada(self):
+        self.assertEqual(ml_highlight_category_ids(
+            [{"prioritize_bestsellers": True, "ml_category_id": "MLB1055"}]),
+            ["MLB1055"])
+
+    def test_ignora_categoria_pausada_ou_travada(self):
+        no_futuro = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        self.assertEqual(ml_highlight_category_ids([
+            {"prioritize_bestsellers": True, "ml_category_id": "MLB1055",
+             "active": False},
+            {"prioritize_bestsellers": True, "ml_category_id": "MLB1132",
+             "active": True, "locked_until": no_futuro},
+        ]), [])
+
+    def test_ignora_id_mal_formatado_ou_vazio(self):
+        self.assertEqual(ml_highlight_category_ids([
+            {"prioritize_bestsellers": True, "ml_category_id": ""},
+            {"prioritize_bestsellers": True, "ml_category_id": "notebooks"},
+            {"prioritize_bestsellers": True, "ml_category_id": None},
+        ]), [])
+
+    def test_normaliza_e_remove_duplicata(self):
+        self.assertEqual(ml_highlight_category_ids([
+            {"prioritize_bestsellers": True, "ml_category_id": "mlb1055"},
+            {"prioritize_bestsellers": True, "ml_category_id": "MLB1055"},
+        ]), ["MLB1055"])
 
 
 if __name__ == "__main__":

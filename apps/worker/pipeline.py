@@ -562,7 +562,10 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
         }).eq("id", product_id).execute()
 
         produto_atual = normalizar_product_row(db.get_product(product_id))
-        score = compute_score(produto_atual, link)
+        score = compute_score(
+            produto_atual, link,
+            prioritize_bestsellers=bool(
+                config_categoria and config_categoria.get("prioritize_bestsellers")))
         db._get().table("products").update({
             "score": score["score_total"],
             "score_breakdown": {
@@ -700,11 +703,15 @@ def normalizar_product_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def compute_score(product: dict[str, Any],
-                  affiliate_link: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                  affiliate_link: Optional[dict[str, Any]] = None, *,
+                  prioritize_bestsellers: bool = False) -> dict[str, Any]:
     """Etapa 3 — Topfy Score decomposto. Aceita tanto o dict cru do
     conector quanto um product_row vindo do banco (normaliza antes de
-    pontuar)."""
-    return calcular_score(normalizar_product_row(product), affiliate_link)
+    pontuar). `prioritize_bestsellers` vem da curadoria do Laboratório de
+    Captura (/campanhas) quando a categoria do produto está marcada para
+    priorizar mais vendidos."""
+    return calcular_score(normalizar_product_row(product), affiliate_link,
+                          prioritize_bestsellers=prioritize_bestsellers)
 
 
 def generate_copies(product: dict[str, Any], *,
@@ -915,7 +922,13 @@ def completar_link_mercadolivre_assistido(
         "generation_method": "HERMES_ASSISTED",
         "verification_status": "VERIFIED",
     }
-    score = compute_score(produto, link_evidence)
+    familia = category_family(produto.get("category"), produto.get("title"))
+    config_categoria = (db.get_capture_lab_config(organization_id)["categories"]
+                        .get(familia) if familia else None)
+    score = compute_score(
+        produto, link_evidence,
+        prioritize_bestsellers=bool(
+            config_categoria and config_categoria.get("prioritize_bestsellers")))
     db.update_product(str(produto["id"]), {
         "score": score["score_total"],
         "score_breakdown": {

@@ -12,6 +12,7 @@ import {
   Save,
   Shuffle,
   Trash2,
+  TrendingUp,
 } from "lucide-react";
 import {
   addDiscoveryBlockword,
@@ -21,8 +22,10 @@ import {
   removeDiscoveryBlockword,
   removeDiscoveryKeyword,
   setDiscoveryCategoryMinScore,
+  setDiscoveryCategoryMlId,
   setDiscoveryCategoryTargetPercent,
   toggleDiscoveryCategory,
+  toggleDiscoveryCategoryBestsellerPriority,
   toggleDiscoveryKeyword,
   unlockDiscoveryCategory,
   updateDiscoveryMinScore,
@@ -42,6 +45,8 @@ export type CaptureLabCategory = {
   targetPercent: number | null;
   lockedUntil: string | null;
   lockedReason: string | null;
+  prioritizeBestsellers: boolean;
+  mlCategoryId: string | null;
 };
 
 export type CaptureLabKeyword = {
@@ -214,6 +219,32 @@ export function CaptureLab({
     startTransition(async () => {
       const result = await setDiscoveryCategoryTargetPercent(categoryId, formData);
       report(result.error, "Meta de distribuição salva.");
+    });
+  }
+
+  function toggleBestsellerPriority(category: CaptureLabCategory, prioritizeBestsellers: boolean) {
+    setCategories((current) =>
+      current.map((row) => (row.id === category.id ? { ...row, prioritizeBestsellers } : row)));
+    startTransition(async () => {
+      const result = await toggleDiscoveryCategoryBestsellerPriority(
+        category.id, prioritizeBestsellers);
+      if (result.error) {
+        setCategories((current) =>
+          current.map((row) => (row.id === category.id ? category : row)));
+      }
+      report(
+        result.error,
+        prioritizeBestsellers
+          ? "Categoria vai priorizar produtos mais vendidos."
+          : "Prioridade de mais vendidos removida.",
+      );
+    });
+  }
+
+  function saveCategoryMlId(categoryId: string, formData: FormData) {
+    startTransition(async () => {
+      const result = await setDiscoveryCategoryMlId(categoryId, formData);
+      report(result.error, "Categoria do Mercado Livre salva.");
     });
   }
 
@@ -398,6 +429,11 @@ export function CaptureLab({
                           Travada até {formatDateTime(category.lockedUntil as string)}
                         </Badge>
                       )}
+                      {category.prioritizeBestsellers && (
+                        <Badge variant="secondary">
+                          <TrendingUp className="size-3" /> Mais vendidos
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                       <form
@@ -438,6 +474,16 @@ export function CaptureLab({
                           Salvar
                         </Button>
                       </form>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={category.prioritizeBestsellers ? "secondary" : "outline"}
+                        disabled={isPending}
+                        onClick={() =>
+                          toggleBestsellerPriority(category, !category.prioritizeBestsellers)}
+                      >
+                        <TrendingUp className="size-4" /> Mais vendidos
+                      </Button>
                       {isLocked ? (
                         <Button
                           type="button"
@@ -461,6 +507,31 @@ export function CaptureLab({
                       )}
                     </div>
                   </div>
+
+                  {category.prioritizeBestsellers && (
+                    <form
+                      action={(formData) => saveCategoryMlId(category.id, formData)}
+                      className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border bg-[#FBFBFC] p-3"
+                    >
+                      <label className="flex items-center gap-1.5 text-xs font-bold text-muted-foreground">
+                        ID da categoria no Mercado Livre (opcional)
+                        <Input
+                          name="ml_category_id"
+                          placeholder="ex.: MLB1055"
+                          defaultValue={category.mlCategoryId ?? ""}
+                          className="h-8 w-32 text-sm"
+                          aria-label={`Categoria oficial do Mercado Livre para ${category.label}`}
+                        />
+                      </label>
+                      <Button type="submit" size="sm" variant="outline" disabled={isPending}>
+                        Salvar
+                      </Button>
+                      <p className="w-full text-xs leading-5 text-muted-foreground">
+                        Soma essa categoria à busca de &ldquo;mais vendidos&rdquo; do Mercado
+                        Livre — encontre o ID em developers.mercadolivre.com.br (categorias).
+                      </p>
+                    </form>
+                  )}
 
                   {lockPanelId === category.id && (
                     <form

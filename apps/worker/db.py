@@ -13,6 +13,8 @@ from typing import Any, Optional
 
 from supabase import create_client, Client
 
+from offer_rules import ml_highlight_category_ids as _ml_highlight_category_ids
+
 
 def get_client() -> Client:
     url = os.environ.get("SUPABASE_URL")
@@ -229,7 +231,8 @@ def get_capture_lab_config(organization_id: str) -> dict[str, Any]:
         pass
     try:
         categorias = (_get().table("discovery_categories")
-                      .select("family_key, active, min_score, locked_until, target_percent")
+                      .select("family_key, active, min_score, locked_until, "
+                             "target_percent, prioritize_bestsellers, ml_category_id")
                       .eq("organization_id", organization_id)
                       .execute().data or [])
         config["categories"] = {row["family_key"]: row for row in categorias}
@@ -268,6 +271,22 @@ def get_discovery_keywords(organization_id: str, source_name: str) -> list[str]:
         return [row["term"] for row in (resp.data or []) if row.get("term")]
     except Exception:
         return []
+
+
+def get_ml_highlight_category_ids(organization_id: str) -> list[str]:
+    """Categorias MLB (ex.: "MLB1055") marcadas pela curadoria (/campanhas)
+    para priorizar mais vendidos — somam-se (nunca substituem) à lista de
+    categorias de "mais vendidos" vinda de variável de ambiente em main.py."""
+    try:
+        categorias = (_get().table("discovery_categories")
+                      .select("active, locked_until, prioritize_bestsellers, "
+                             "ml_category_id")
+                      .eq("organization_id", organization_id)
+                      .eq("prioritize_bestsellers", True)
+                      .execute().data or [])
+    except Exception:
+        return []
+    return _ml_highlight_category_ids(categorias)
 
 
 def register_audit(organization_id: Optional[str], *, actor_type: str,

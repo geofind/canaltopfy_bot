@@ -108,7 +108,7 @@ export default async function CampanhasPage({ searchParams }: CampanhasPageProps
     supabase.from("discovery_settings").select("min_score").maybeSingle(),
     supabase
       .from("discovery_categories")
-      .select("id, family_key, label, active, min_score, target_percent, locked_until, locked_reason")
+      .select("id, family_key, label, active, min_score, target_percent, locked_until, locked_reason, prioritize_bestsellers, ml_category_id")
       .order("label"),
     supabase
       .from("discovery_keywords")
@@ -166,6 +166,8 @@ export default async function CampanhasPage({ searchParams }: CampanhasPageProps
     targetPercent: row.target_percent,
     lockedUntil: row.locked_until,
     lockedReason: row.locked_reason,
+    prioritizeBestsellers: row.prioritize_bestsellers,
+    mlCategoryId: row.ml_category_id,
   }));
 
   const captureKeywords: CaptureLabKeyword[] = (keywordRows ?? []).map((row) => ({

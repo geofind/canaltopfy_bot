@@ -48,13 +48,24 @@ def _desconto_real(product: dict[str, Any]) -> tuple[float, Optional[str]]:
     return round(min(desconto, 1.0) * PESO_MAXIMO["desconto_real"], 1), None
 
 
-def _vendas(product: dict[str, Any]) -> tuple[float, Optional[str]]:
-    """Vendas (15%): contagem de vendas da fonte, escala logarítmica —
-    10 vendas já pontua algo, milhares satura."""
+#  Categoria marcada como "priorizar mais vendidos" na curadoria
+#  (/campanhas) multiplica o teto da dimensão "vendas" por isso — reforça
+#  o peso sem alterar PESO_MAXIMO (spec aprovado, some 100) pros produtos
+#  de categorias sem essa prioridade.
+BONUS_VENDAS_CATEGORIA_PRIORIZADA = 2.0
+
+
+def _vendas(product: dict[str, Any], *, prioritize_bestsellers: bool = False,
+           ) -> tuple[float, Optional[str]]:
+    """Vendas (15%, dobra pra categorias marcadas como prioridade de mais
+    vendidos): contagem de vendas da fonte, escala logarítmica — 10
+    vendas já pontua algo, milhares satura."""
     sold = product.get("sold_count")
     if sold is None:
         return 0.0, "Sem contagem de vendas confirmada — dimensão zerada."
-    pontos = min(PESO_MAXIMO["vendas"], math.log10(max(sold, 1) + 1) * 3.5)
+    teto = PESO_MAXIMO["vendas"] * (
+        BONUS_VENDAS_CATEGORIA_PRIORIZADA if prioritize_bestsellers else 1.0)
+    pontos = min(teto, math.log10(max(sold, 1) + 1) * 3.5)
     return round(pontos, 1), None
 
 
@@ -139,8 +150,14 @@ def _confiabilidade(product: dict[str, Any]) -> tuple[float, Optional[str]]:
 def calcular_score(
     product: dict[str, Any],
     affiliate_link: Optional[dict[str, Any]] = None,
+    *,
+    prioritize_bestsellers: bool = False,
 ) -> dict[str, Any]:
     """Devolve o score decomposto (nunca só o total), avisos e bloqueios.
+
+    `prioritize_bestsellers` vem da curadoria do Laboratório de Captura
+    (/campanhas) por categoria — reforça o teto da dimensão "vendas" pra
+    esse produto sem mexer no PESO_MAXIMO global.
 
     Bloqueios (impedem aprovação, não só reduzem score):
     - link de afiliado não VERIFIED;
@@ -150,7 +167,7 @@ def calcular_score(
 
     for campo, (valor, aviso) in {
         "desconto_real": _desconto_real(product),
-        "vendas": _vendas(product),
+        "vendas": _vendas(product, prioritize_bestsellers=prioritize_bestsellers),
         "avaliacao": _avaliacao(product),
         "comissao": _comissao(product, affiliate_link),
         "tendencia": _tendencia(product),
@@ -173,8 +190,11 @@ def calcular_score(
     if product.get("current_price") is None:
         bloqueios.append("Sem preço confirmado — não é possível aprovar.")
 
+    tetos = dict(PESO_MAXIMO)
+    if prioritize_bestsellers:
+        tetos["vendas"] *= BONUS_VENDAS_CATEGORIA_PRIORIZADA
     resumo = "; ".join(
-        f"{campo} {valor:.0f}/{PESO_MAXIMO[campo]}"
+        f"{campo} {valor:.0f}/{tetos[campo]:.0f}"
         for campo, valor in dimensoes.items())
     reason_summary = f"Topfy Score {score_total:.0f}: {resumo}."
 

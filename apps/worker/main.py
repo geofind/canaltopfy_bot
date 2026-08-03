@@ -298,6 +298,18 @@ def _termos_com_banco(organization_id: str, source_name: str,
     return [*termos_env, *extras]
 
 
+def _categorias_ml_com_banco(organization_id: str,
+                             categorias_env: list[str]) -> list[str]:
+    """Categorias MLB de "mais vendidos" (highlights) configuradas via env
+    var + as marcadas como prioridade de mais vendidos na curadoria em
+    /campanhas (Laboratório de Captura) — só soma, nunca substitui, então
+    quem não usou a tela continua exatamente igual."""
+    vistos = {categoria.strip().upper() for categoria in categorias_env}
+    extras = [categoria for categoria in db.get_ml_highlight_category_ids(organization_id)
+             if categoria not in vistos]
+    return [*categorias_env, *extras]
+
+
 def rodar_ciclo_automatico_se_configurado(*, now: Optional[datetime] = None) -> None:
     """Roda o modo 100% automático no próprio ritmo (AUTO_PIPELINE_
     INTERVAL_MINUTES, não a cada poll de 5s) — chamado a cada volta do
@@ -417,8 +429,10 @@ def rodar_descoberta_ml_se_configurada(*, now: Optional[datetime] = None) -> Non
          (agora - _ultima_tendencia_ml).total_seconds() >=
          ML_DISCOVERY_TREND_REFRESH_MINUTES * 60)
     )
+    categorias_disponiveis = _categorias_ml_com_banco(
+        ML_DISCOVERY_ORG_ID, ML_DISCOVERY_HIGHLIGHT_CATEGORIES)
     consultar_highlights = bool(
-        ML_DISCOVERY_HIGHLIGHT_CATEGORIES and
+        categorias_disponiveis and
         (_ultimo_highlight_ml is None or
          (agora - _ultimo_highlight_ml).total_seconds() >=
          ML_DISCOVERY_HIGHLIGHT_REFRESH_MINUTES * 60)
@@ -443,20 +457,20 @@ def rodar_descoberta_ml_se_configurada(*, now: Optional[datetime] = None) -> Non
         _indice_termo_ml = (_indice_termo_ml + quantidade) % len(
             termos_disponiveis)
     categorias_ciclo: list[str] = []
-    if (ML_DISCOVERY_HIGHLIGHT_CATEGORIES and
+    if (categorias_disponiveis and
             (consultar_tendencias or consultar_highlights)):
         quantidade_categorias = min(
             max(1, ML_DISCOVERY_HIGHLIGHT_CATEGORIES_PER_CYCLE),
-            len(ML_DISCOVERY_HIGHLIGHT_CATEGORIES))
+            len(categorias_disponiveis))
         categorias_ciclo = [
-            ML_DISCOVERY_HIGHLIGHT_CATEGORIES[
+            categorias_disponiveis[
                 (_indice_categoria_ml + deslocamento) %
-                len(ML_DISCOVERY_HIGHLIGHT_CATEGORIES)]
+                len(categorias_disponiveis)]
             for deslocamento in range(quantidade_categorias)
         ]
         _indice_categoria_ml = (
             _indice_categoria_ml + quantidade_categorias
-        ) % len(ML_DISCOVERY_HIGHLIGHT_CATEGORIES)
+        ) % len(categorias_disponiveis)
     try:
         resultado = capturar_ofertas_mercadolivre(
             ML_DISCOVERY_ORG_ID,
