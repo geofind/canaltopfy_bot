@@ -256,6 +256,67 @@ class ImagemPostTests(unittest.TestCase):
         mock_extrai.assert_not_called()
 
 
+class PublishToTelegramUsaFotoRealTests(unittest.TestCase):
+    """Regressão: publicação manda a foto real do produto direto na
+    mensagem — sem card renderizado (/og/card) por cima, formato mais
+    simples usado pela concorrência (referência: post benchmark do GTA VI:
+    foto real + legenda em texto). O link mostrado/clicado é o link final
+    de afiliado (loja real), não mais o redirect /r/<id> do Topfy — pedido
+    explícito do usuário."""
+
+    CAMPANHA = {"id": "c1", "product_id": "p1", "status": "APPROVED",
+                "organization_id": "org1", "slug": "c1"}
+
+    def _publicar(self, produto, **kw):
+        capturado = {}
+
+        def fake_publicar(*, copy, chat_id, redirect_url, image_url, **_):
+            capturado["image_url"] = image_url
+            capturado["redirect_url"] = redirect_url
+            return {"external_message_id": "999"}
+
+        with mock.patch.object(db, "get_campaign", return_value=self.CAMPANHA), \
+             mock.patch.object(db, "get_product", return_value=produto), \
+             mock.patch.object(db, "has_active_publication", return_value=False), \
+             mock.patch.object(db, "create_publication",
+                               return_value={"id": "pub1"}), \
+             mock.patch.object(db, "mark_publication_result"), \
+             mock.patch.object(db, "register_audit"), \
+             mock.patch.object(db, "get_cta_phrases", return_value=[]), \
+             mock.patch.object(pipeline, "_load_content",
+                               return_value={"headline": "h", "body": "b",
+                                              "cta": "Ver", "disclaimer": "d"}), \
+             mock.patch("publishers.telegram.publicar_oferta_telegram",
+                        side_effect=fake_publicar), \
+             mock.patch.object(db, "update_campaign"):
+            pipeline.publish_to_telegram("c1", "content1", chat_id="-100123", **kw)
+        return capturado
+
+    def test_image_url_e_a_foto_real_nao_o_card(self):
+        produto = {**PRODUTO, "image_url": "https://ae-cdn.example/foto-real.jpg",
+                   "affiliate_link": "https://s.click.aliexpress.com/e/_real"}
+        capturado = self._publicar(produto)
+        self.assertEqual(capturado["image_url"], produto["image_url"])
+        self.assertNotIn("/og/card/", capturado["image_url"])
+
+    def test_link_mostrado_e_o_afiliado_final_nao_o_redirect_r(self):
+        produto = {**PRODUTO, "affiliate_link": "https://s.click.aliexpress.com/e/_real"}
+        capturado = self._publicar(produto)
+        self.assertEqual(capturado["redirect_url"], produto["affiliate_link"])
+        self.assertNotIn("/r/", capturado["redirect_url"])
+
+    def test_sem_link_de_afiliado_nao_publica(self):
+        produto = {**PRODUTO, "affiliate_link": None}
+        with self.assertRaises(ValueError) as ctx:
+            self._publicar(produto)
+        self.assertIn("link de afiliado", str(ctx.exception))
+
+    def test_link_pendente_nao_publica(self):
+        produto = {**PRODUTO, "affiliate_link": "PENDING_OFFICIAL_TOOL"}
+        with self.assertRaises(ValueError):
+            self._publicar(produto)
+
+
 class JanelaAtivaTests(unittest.TestCase):
     def _fila(self, **kw):
         return {"id": "f1", "window_start": None, "window_end": None, **kw}
@@ -635,11 +696,93 @@ class MercadoLivreHermesFlowTests(unittest.TestCase):
             for call in update_product.call_args_list
         ))
         create_content.assert_called_once()
-        approve.assert_called_once_with("c1", ["co1"], actor_type="agent")
+        approve.assert_called_once_with("c1", ["co1"], actor_type="worker")
         self.assertTrue(any(row.get("queue_id") == "q1" for row in table.inserts))
         self.assertIn(mock.call("c1", {"status": "SCHEDULED"}),
                       update_campaign.call_args_list)
         self.assertGreaterEqual(audit.call_count, 2)
+
+
+class DescobrirProdutosAliexpressTests(unittest.TestCase):
+    """Regressão: sem paginação, o modo automático sempre via o mesmo
+    topo do resultado (já importado pelo dedupe) e "esgotava" rápido —
+    12 ofertas publicadas e depois nada de novo. Paginar garante que
+    ciclos seguintes cavam mais fundo no catálogo em vez de tropeçar
+    sempre nos mesmos produtos já vistos."""
+
+    def test_busca_varias_paginas_por_termo(self):
+        pagina1 = [{"canonical_url": f"https://x/{i}"} for i in range(20)]
+        pagina2 = [{"canonical_url": f"https://x/p2-{i}"} for i in range(20)]
+        pagina3: list = []  # AliExpress acabou os resultados
+
+        chamadas = []
+
+        def fake_search(self, termo, *, page_no=1):
+            chamadas.append((termo, page_no))
+            return {1: pagina1, 2: pagina2, 3: pagina3}[page_no]
+
+        with mock.patch("connectors.aliexpress.AliExpressConnector.search_offers",
+                        fake_search):
+            resultado = pipeline.descobrir_produtos_aliexpress(
+                ["fone"], max_por_termo=20, paginas=5,
+                sortear_pagina=lambda a, b: 1)
+
+        self.assertEqual(len(resultado), 40)  # página 1 + página 2
+        self.assertEqual(chamadas, [("fone", 1), ("fone", 2), ("fone", 3)])
+
+    def test_para_no_limite_sem_esgotar_paginas_restantes(self):
+        pagina1 = [{"canonical_url": f"https://x/{i}"} for i in range(20)]
+        chamadas = []
+
+        def fake_search(self, termo, *, page_no=1):
+            chamadas.append(page_no)
+            return pagina1
+
+        with mock.patch("connectors.aliexpress.AliExpressConnector.search_offers",
+                        fake_search):
+            pipeline.descobrir_produtos_aliexpress(
+                ["fone"], max_por_termo=10, paginas=5,
+                sortear_pagina=lambda a, b: 1)
+
+        # max_por_termo(10) * paginas(5) = 50 -> para depois de 3 páginas (60 >= 50)
+        self.assertEqual(chamadas, [1, 2, 3])
+
+    def test_falha_de_credencial_num_termo_nao_derruba_outros(self):
+        from connectors import CredencialNaoConfigurada
+
+        def fake_search(self, termo, *, page_no=1):
+            if termo == "quebrado":
+                raise CredencialNaoConfigurada("sem chave")
+            return [{"canonical_url": "https://x/ok"}]
+
+        with mock.patch("connectors.aliexpress.AliExpressConnector.search_offers",
+                        fake_search):
+            resultado = pipeline.descobrir_produtos_aliexpress(
+                ["quebrado", "fone"], paginas=1, sortear_pagina=lambda a, b: 1)
+
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0]["canonical_url"], "https://x/ok")
+
+    def test_sorteia_pagina_inicial_por_termo_dentro_do_limite(self):
+        """Sem isso, todo ciclo automático re-varre sempre a página 1 —
+        os mesmos produtos de sempre (já dedupados) — e "esgota" rápido."""
+        paginas_pedidas = []
+
+        def fake_search(self, termo, *, page_no=1):
+            paginas_pedidas.append(page_no)
+            return []  # não importa o conteúdo aqui, só a página pedida
+
+        with mock.patch("connectors.aliexpress.AliExpressConnector.search_offers",
+                        fake_search):
+            pipeline.descobrir_produtos_aliexpress(
+                ["a", "b", "c"], paginas=1, pagina_maxima=30)
+
+        self.assertEqual(len(paginas_pedidas), 3)
+        for pagina in paginas_pedidas:
+            self.assertGreaterEqual(pagina, 1)
+            self.assertLessEqual(pagina, 30)
+        # com 3 termos e faixa 1-30, dificilimo sortear o mesmo valor pros 3
+        self.assertGreater(len(set(paginas_pedidas)), 1)
 
 
 class MontarCopyTextTests(unittest.TestCase):
@@ -647,6 +790,35 @@ class MontarCopyTextTests(unittest.TestCase):
         copia = {"headline": "H", "body": "B", "cta": "C", "disclaimer": "D"}
         texto = pipeline.montar_copy_text(copia)
         self.assertEqual(texto, "H\n\nB\n\nC\n\nD")
+
+
+class LoadContentTests(unittest.TestCase):
+    """Regressão: _load_content precisa reconstruir cta E disclaimer do
+    copy_text persistido — antes desta correção os dois vinham hardcoded
+    como "" (mesmo com o texto guardando os dois certinho), então toda
+    publicação real saía sem CTA e sem disclaimer no final da mensagem."""
+
+    def test_reconstroi_cta_e_disclaimer(self):
+        copia_original = {
+            "headline": "🔥 Produto X - R$ 49,90 🔥 #anúncio",
+            # body com várias linhas internas separadas por "\n\n", como
+            # o corpo real gerado por _gerar_fallback (specs/cupom/preço).
+            "body": "🔴 A | B 🔴\n\n🎟 Cupom: X\n\n💸 R$ 49,90",
+            "cta": "Corre que acaba!",
+            "disclaimer": "👇 Clique no link... 💙",
+        }
+        copy_text = pipeline.montar_copy_text(copia_original)
+        table = FakeTable(single={"id": "co1", "copy_text": copy_text})
+        client = mock.MagicMock()
+        client.table.return_value = table
+
+        with mock.patch.object(db, "_get", return_value=client):
+            reconstruido = pipeline._load_content("co1")
+
+        self.assertEqual(reconstruido["headline"], copia_original["headline"])
+        self.assertEqual(reconstruido["body"], copia_original["body"])
+        self.assertEqual(reconstruido["cta"], copia_original["cta"])
+        self.assertEqual(reconstruido["disclaimer"], copia_original["disclaimer"])
 
 
 if __name__ == "__main__":

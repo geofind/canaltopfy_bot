@@ -4,8 +4,9 @@ Portado do CanalTopfy Lab (scripts/cupons/telegram_publisher.py), adaptado
 para o schema Supabase (publications). stdlib apenas (urllib), retry com
 retry_after em FloodWait/429, token nunca aparece em log/erro.
 
-CTA usa o redirect first-party do Topfy (/r/<id>) — nunca link de afiliado
-bruto na mensagem. Nunca publica a mesma campanha duas vezes no mesmo canal.
+O link mostrado no post é o link final de afiliado (loja real) — pedido
+explícito pra parecer o link de destino de verdade, não um encurtador do
+Topfy por cima. Nunca publica a mesma campanha duas vezes no mesmo canal.
 """
 from __future__ import annotations
 
@@ -81,16 +82,34 @@ def _chamar_api(metodo: str, payload: dict[str, Any], *,
 
 
 def _baixar_imagem(url: str, *, timeout: int = 20) -> Optional[bytes]:
-    """Baixa a imagem do card pra enviar como upload direto — o fetcher de
-    URL do Telegram (sendPhoto com `photo` = URL) exige Content-Length, que
-    rotas dinâmicas na Vercel não declaram (Transfer-Encoding: chunked), e
-    rejeita com 'wrong type of the web page content'. None = segue sem
-    foto (sendMessage), nunca derruba a publicação por isso."""
+    """Baixa a foto real do produto pra enviar como upload direto — o
+    fetcher de URL do Telegram (sendPhoto com `photo` = URL) exige
+    Content-Length, que nem toda URL de loja/CDN declara de forma confiável,
+    e rejeita com 'wrong type of the web page content'. Sem "image/webp" no
+    Accept de propósito (mesma razão do og/card: várias CDNs servem webp só
+    quando o cliente diz que aceita; omitir garante jpeg/png, que o Telegram
+    aceita sem conversão). None = segue sem foto (sendMessage), nunca
+    derruba a publicação por isso."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        req = urllib.request.Request(
+            url, headers={"Accept": "image/jpeg,image/png"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
     except (urllib.error.URLError, urllib.error.HTTPError):
         return None
+
+
+def _detectar_tipo_imagem(dados: bytes) -> tuple[str, str]:
+    """Detecta o tipo real da imagem pelos magic bytes — a URL do produto
+    (AliExpress/ML) nem sempre tem extensão ou Content-Type confiável, e o
+    multipart do sendPhoto precisa declarar um valor correto."""
+    if dados[:2] == b"\xff\xd8":
+        return "jpg", "image/jpeg"
+    if dados[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png", "image/png"
+    if dados[:4] == b"RIFF" and dados[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    return "jpg", "image/jpeg"
 
 
 def _chamar_api_multipart(
@@ -107,6 +126,7 @@ def _chamar_api_multipart(
             "@BotFather e defina a variável de ambiente.")
     url = f"{TELEGRAM_API_BASE}/bot{token}/{metodo}"
     boundary = uuid.uuid4().hex
+    extensao, content_type = _detectar_tipo_imagem(foto_bytes)
 
     def montar() -> urllib.request.Request:
         partes: list[bytes] = []
@@ -116,7 +136,7 @@ def _chamar_api_multipart(
                 f'name="{chave}"\r\n\r\n{valor}\r\n'.encode())
         partes.append(
             f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; '
-            f'filename="card.png"\r\nContent-Type: image/png\r\n\r\n'.encode())
+            f'filename="foto.{extensao}"\r\nContent-Type: {content_type}\r\n\r\n'.encode())
         partes.append(foto_bytes)
         partes.append(f"\r\n--{boundary}--\r\n".encode())
         body = b"".join(partes)
@@ -171,14 +191,21 @@ def _escapar_html(texto: str) -> str:
     return (texto.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def _montar_mensagem(copy: dict[str, Any], redirect_url: str) -> str:
+def _montar_mensagem(copy: dict[str, Any], link_url: str) -> str:
+    """Monta a legenda — link final por EXTENSO (texto visível com 🔗,
+    não mais escondido atrás de um texto de CTA): o Telegram já
+    auto-linkifica URL em texto puro, e fica no padrão dos canais de
+    review (link sempre visível, nunca só um botão)."""
     headline = copy.get("headline") or ""
     body = copy.get("body") or ""
-    cta = copy.get("cta") or "Ver oferta"
+    cta = (copy.get("cta") or "").strip()
     disclaimer = copy.get("disclaimer") or ""
-    return (f"<b>{_escapar_html(headline)}</b>\n\n{_escapar_html(body)}\n\n"
-            f"<a href=\"{redirect_url}\">{_escapar_html(cta)}</a>\n\n"
-            f"<i>{_escapar_html(disclaimer)}</i>")
+    blocos = [f"<b>{_escapar_html(headline)}</b>", _escapar_html(body)]
+    if cta:
+        blocos.append(_escapar_html(cta))
+    blocos.append(f"🔗 {_escapar_html(link_url)}")
+    blocos.append(f"<i>{_escapar_html(disclaimer)}</i>")
+    return "\n\n".join(blocos)
 
 
 def publicar_oferta_telegram(
@@ -190,9 +217,11 @@ def publicar_oferta_telegram(
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     """Publica a cópia aprovada no canal/grupo `chat_id`. `redirect_url`
-    deve ser URL ABSOLUTA do redirect first-party (/r/<id>). Devolve
-    {'external_message_id': ...} — a persistência na tabela publications
-    é responsabilidade do pipeline."""
+    é a URL mostrada e clicável no post — hoje o link final de afiliado
+    (loja real), passado assim pelo pipeline; o nome do parâmetro ficou
+    do desenho antigo (era sempre /r/<id>), mas a função aceita qualquer
+    URL absoluta. Devolve {'external_message_id': ...} — a persistência
+    na tabela publications é responsabilidade do pipeline."""
     if not chat_id:
         raise ValueError("publicar no Telegram exige 'chat_id' (canal/grupo de destino)")
 
@@ -206,11 +235,10 @@ def publicar_oferta_telegram(
             {"chat_id": chat_id, "caption": mensagem, "parse_mode": "HTML"},
             foto_bytes, sleep_fn=sleep_fn)
     else:
-        # Sem foto (download do card falhou), cai pra texto puro — mas com
-        # preview de link DESLIGADO: sem isso, o Telegram gera uma prévia
-        # feia da própria página de origem (AliExpress/ML) a partir do link
-        # de afiliado embutido no CTA, expondo a loja e o texto dela em vez
-        # do card da Topfy.
+        # Sem foto (download da imagem falhou), cai pra texto puro — mas
+        # com preview de link DESLIGADO: sem isso, o Telegram gera uma
+        # prévia grande da página da loja logo abaixo do texto, duplicando
+        # visualmente a foto que a mensagem já devia ter tido.
         resposta = _chamar_api("sendMessage", {
             "chat_id": chat_id, "text": mensagem, "parse_mode": "HTML",
             "disable_web_page_preview": True}, sleep_fn=sleep_fn)

@@ -18,9 +18,9 @@ import urllib.request
 from typing import Any, Optional
 
 DISCLAIMER_PADRAO = (
-    "Link de afiliado: se você comprar por aqui, o Topfy pode ganhar uma "
-    "comissão, sem custo extra para você. Preço e disponibilidade podem "
-    "mudar — confira na loja antes de comprar."
+    "👇 Clique no link para efetuar a compra. Você paga exatamente o "
+    "mesmo preço e ainda ajuda o Canal Topfy a continuar encontrando as "
+    "melhores ofertas todos os dias. Muito obrigado pelo apoio! 💙"
 )
 
 # Frases enganosas sem fonte verificável — barra qualquer copy, mesmo manual.
@@ -84,18 +84,47 @@ def _fatos_extras(product: dict[str, Any]) -> list[str]:
 
 
 def _linha_preco(product: dict[str, Any]) -> Optional[str]:
-    """Linha "❌de R$ X | 💸por R$ Y 🔥" — nunca inventa desconto: o preço
-    original só entra se vier confirmado E for maior que o atual."""
+    """Linha "💸 R$ Y" — só o preço atual confirmado; a comparação com o
+    original vira a linha de desconto separada (_linha_desconto)."""
     atual = product.get("current_price")
     if atual is None:
         return None
-    original = product.get("original_price")
     nota = (product.get("payment_note") or "").strip()
-    partes = []
-    if original is not None and original > atual:
-        partes.append(f"❌de {_fmt_preco(original)}")
-    partes.append(f"💸por {_fmt_preco(atual)} 🔥" + (f" {nota}" if nota else ""))
-    return " | ".join(partes)
+    return f"💸 {_fmt_preco(atual)}" + (f" {nota}" if nota else "")
+
+
+def _linha_desconto(product: dict[str, Any]) -> Optional[str]:
+    """Linha "🏷 -X% (de R$ Y)" — nunca inventa desconto: só aparece
+    quando os DOIS preços (atual e original) vêm confirmados e o
+    original é realmente maior; o percentual é calculado a partir deles,
+    nunca de um "discount_percent" separado que possa divergir."""
+    atual = product.get("current_price")
+    original = product.get("original_price")
+    if atual is None or original is None or original <= atual:
+        return None
+    pct = round((1 - atual / original) * 100)
+    if pct <= 0:
+        return None
+    return f"🏷 -{pct}% (de {_fmt_preco(original)})"
+
+
+_SEPARADORES_SPEC = (" | ", " – ", " - ", ", ")
+
+
+def _linha_especificacoes(product: dict[str, Any]) -> Optional[str]:
+    """Linha "🔴 ... 🔴" no estilo minimalista dos canais de review — a
+    API das lojas não devolve especificação estruturada (só o título em
+    texto corrido), então a única aproximação honesta é reaproveitar o
+    próprio título quando ele já vier com partes separadas por vírgula/
+    hífen/barra; título "limpo" (sem separador) não gera essa linha —
+    nunca inventa um atributo técnico que não esteja no nome real."""
+    titulo = _nome(product)
+    for separador in _SEPARADORES_SPEC:
+        if separador in titulo:
+            partes = [p.strip() for p in titulo.split(separador) if p.strip()]
+            if len(partes) >= 2:
+                return "🔴 " + " | ".join(partes) + " 🔴"
+    return None
 
 
 def _linhas_cupom(product: dict[str, Any]) -> list[str]:
@@ -112,20 +141,30 @@ def _linhas_cupom(product: dict[str, Any]) -> list[str]:
         if not codigo:
             continue
         rotulo = cupom.get("label") if isinstance(cupom, dict) else None
-        prefixo = "🎟️Use o cupom: " if i == 0 else "🎟️ou "
         sufixo = f" ({rotulo})" if rotulo else ""
-        linhas.append(f"{prefixo}{codigo}{sufixo}")
+        if i == 0:
+            linhas.append(
+                f"🎟 Cupom: {codigo} + Siga a loja e resgate o cupom exclusivo{sufixo}")
+        else:
+            linhas.append(f"🎟 ou {codigo}{sufixo}")
     return linhas
 
 
 def _headline_variantes(product: dict[str, Any],
                         loja: Optional[str] = None) -> list[str]:
-    """🚨 chama atenção — o gancho engraçado/irônico de verdade fica a
-    cargo da IA (prompt em _gerar_openrouter); o fallback determinístico
-    (sem IA) fica no formato simples e honesto de sempre."""
+    """Título no estilo "🔥 <produto> - R$ <preço> 🔥 #anúncio" (padrão
+    dos canais de review/cupom) — o gancho engraçado/irônico de verdade
+    fica a cargo da IA (prompt em _gerar_openrouter); o fallback
+    determinístico (sem IA) fica no formato simples e honesto de sempre."""
     nome = _nome(product)
     sufixo = f" na {loja_nome}" if (loja_nome := _nome_loja(loja)) else ""
-    return [f"🚨 {nome}{sufixo}", f"🔥 {nome}{sufixo}", f"👀 {nome}{sufixo}"]
+    atual = product.get("current_price")
+    preco = f" - {_fmt_preco(atual)}" if atual is not None else ""
+    return [
+        f"🔥 {nome}{sufixo}{preco} 🔥 #anúncio",
+        f"🚨 {nome}{sufixo}{preco} 🚨 #anúncio",
+        f"👀 {nome}{sufixo}{preco} 👀 #anúncio",
+    ]
 
 
 def _cta_variantes(product: dict[str, Any]) -> list[str]:
@@ -135,9 +174,17 @@ def _cta_variantes(product: dict[str, Any]) -> list[str]:
 def _gerar_fallback(product: dict[str, Any], template_id: str, seed: Optional[int],
                     loja: Optional[str] = None) -> dict[str, str]:
     rng = random.Random(seed)
-    linha_preco = _linha_preco(product)
-    partes = [linha_preco] if linha_preco else ["Preço a confirmar na loja."]
+    partes = []
+    spec = _linha_especificacoes(product)
+    if spec:
+        partes.append(spec)
     partes.extend(_linhas_cupom(product))
+
+    linha_preco = _linha_preco(product)
+    partes.append(linha_preco if linha_preco else "Preço a confirmar na loja.")
+    desconto = _linha_desconto(product)
+    if desconto:
+        partes.append(desconto)
 
     if template_id == "oferta-beneficios":
         extras = _fatos_extras(product)
@@ -169,31 +216,46 @@ def _gerar_openrouter(product: dict[str, Any], template_id: str,
     model = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat:free")
     prompt = (
         "Você escreve legendas de oferta pra um canal de Telegram "
-        "brasileiro de achadinhos/cupons — tom direto, informal, com "
-        "emojis, no estilo desses canais. Use APENAS os fatos abaixo — "
-        "NUNCA invente preço, desconto, avaliação, cupom, prazo ou "
-        "estoque; se um dado não estiver nos fatos, simplesmente não "
-        "mencione. Responda APENAS com um objeto JSON, sem texto fora "
-        "dele: {\"headline\": string, \"body\": string, \"cta\": string}.\n\n"
-        "- headline: uma linha curta e chamativa com 1-2 emojis — pode ser "
-        "leve, engraçada ou uma dica de uso pra esse produto específico "
-        "(ex.: \"🧻 Pra não sair ensopando o banheiro inteiro\"); se não "
-        "tiver uma ideia boa e específica pro produto, use só "
-        "\"🚨 <nome do produto>\". NUNCA invente um motivo/característica "
-        "que não esteja nos fatos ou no nome do produto.\n"
-        "- body: se a headline foi uma piada/dica (não o nome do produto), "
-        "comece o body com o nome do produto; depois a linha de preço no "
-        "formato \"❌de R$ X,XX | 💸por R$ Y,YY 🔥\" (formato brasileiro, "
-        "vírgula decimal — inclua o \"❌de\" só se houver preço original "
-        "nos fatos, maior que o atual); se os fatos tiverem cupom(ns), "
-        "adicione uma linha \"🎟️Use o cupom: CODIGO\" por cupom (a partir "
-        "do segundo, use \"🎟️ou CODIGO\"). Só mencione quantidade vendida "
-        "(sold_count) se for um número que realmente impressiona (dezenas "
-        "ou mais) — nunca escreva \"0 vendidos\" ou uma contagem baixa, "
-        "nesse caso simplesmente omita.\n"
-        "- cta: chamada curta (ex.: \"Ver oferta\").\n\n"
-        "Não inclua o disclaimer de afiliado — ele é adicionado depois "
-        "automaticamente.\n\n"
+        "brasileiro de cupons/achadinhos, no estilo direto e minimalista "
+        "de canais como BenchPromos — sem piada, sem enrolação. Use "
+        "APENAS os fatos abaixo — NUNCA invente preço, desconto, "
+        "avaliação, cupom, parcelamento, desconto em moedas/pontos, "
+        "especificação técnica, prazo ou estoque; se um dado não estiver "
+        "nos fatos, simplesmente não mencione. Responda APENAS com um "
+        "objeto JSON, sem texto fora dele: "
+        "{\"headline\": string, \"body\": string, \"cta\": string}.\n\n"
+        "- headline: uma linha só, no formato \"🔥 <nome do produto> - "
+        "R$ <preço atual, formato brasileiro com vírgula decimal> 🔥 "
+        "#anúncio\" (pode variar o emoji das pontas entre 🔥, 🚨 ou 👀); "
+        "se não houver preço nos fatos, use só \"🔥 <nome do produto> 🔥 "
+        "#anúncio\". NUNCA invente um motivo/característica que não "
+        "esteja nos fatos ou no nome do produto.\n"
+        "- body: linhas curtas separadas por quebra dupla, NESTA ordem "
+        "(pule qualquer item sem dado real — nunca invente pra "
+        "preencher):\n"
+        "  1. \"🔴 <partes> 🔴\" com as partes separadas por \"|\" — SÓ "
+        "se o nome do produto já vier com partes separadas por vírgula/"
+        "hífen/barra que dê pra reaproveitar direto; nunca crie uma "
+        "especificação técnica que não esteja literalmente no nome.\n"
+        "  2. se os fatos tiverem cupom(ns): \"🎟 Cupom: CODIGO + Siga a "
+        "loja e resgate o cupom exclusivo\" (primeiro cupom) e \"🎟 ou "
+        "CODIGO\" (demais, um por linha).\n"
+        "  3. \"💸 R$ <preço atual>\" (formato brasileiro, vírgula "
+        "decimal).\n"
+        "  4. se os fatos tiverem preço original maior que o atual: "
+        "\"🏷 -X% (de R$ <preço original>)\", com X calculado a partir "
+        "dos dois preços reais dos fatos (nunca copiado de outro campo "
+        "de desconto que não bata com a conta).\n"
+        "NUNCA mencione parcelamento, desconto em moedas/pontos ou "
+        "qualquer condição de pagamento que não esteja explicitamente "
+        "nos fatos. Só mencione quantidade vendida (sold_count) se for "
+        "um número que realmente impressiona (dezenas ou mais) — nunca "
+        "escreva \"0 vendidos\" ou uma contagem baixa, nesse caso "
+        "simplesmente omita.\n"
+        "- cta: opcional, uma chamada bem curta (ex.: \"Corre que "
+        "acaba!\"); use \"\" se não tiver nada bom a acrescentar.\n\n"
+        "Não inclua o link nem o disclaimer de afiliado — são "
+        "adicionados depois automaticamente.\n\n"
         f"Fatos:\n{json.dumps(product, ensure_ascii=False)}"
         + (f"\nLoja de origem: {_nome_loja(loja)}" if _nome_loja(loja) else "")
     )

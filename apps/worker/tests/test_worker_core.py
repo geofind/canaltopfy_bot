@@ -142,6 +142,41 @@ class ContentTests(unittest.TestCase):
         self.assertIn("R$ 49,90", copy["body"])
         self.assertIn("R$ 99,90", copy["body"])
 
+    def test_headline_no_padrao_produto_preco_hashtag(self):
+        """Padrão pedido (referência BenchPromos): "🔥 <produto> - R$ X 🔥
+        #anúncio" — preço e hashtag na própria linha do título."""
+        copy = gerar_copy(PRODUTO_VERIFIED, "oferta-padrao", provider="fallback", seed=1)
+        self.assertIn("R$ 49,90", copy["headline"])
+        self.assertIn("#anúncio", copy["headline"])
+
+    def test_linha_desconto_calculada_dos_precos_reais(self):
+        """"🏷 -X% (de R$ Y)" só aparece com os dois preços confirmados —
+        X é calculado a partir deles, nunca inventado."""
+        copy = gerar_copy(PRODUTO_VERIFIED, "oferta-padrao", provider="fallback", seed=1)
+        self.assertIn("🏷 -50% (de R$ 99,90)", copy["body"])
+
+    def test_sem_preco_original_nao_gera_linha_de_desconto(self):
+        produto = {k: v for k, v in PRODUTO_VERIFIED.items() if k != "original_price"}
+        copy = gerar_copy(produto, "oferta-padrao", provider="fallback", seed=1)
+        self.assertNotIn("🏷", copy["body"])
+
+    def test_especificacoes_derivadas_do_titulo_com_separador(self):
+        """Sem dado estruturado real, a linha "🔴 ... 🔴" só existe quando
+        o próprio título já vier com partes separáveis (vírgula/hífen/
+        barra) — nunca inventa uma especificação técnica."""
+        produto = dict(PRODUTO_VERIFIED, title="Mouse Sem Fio K7, Branco")
+        copy = gerar_copy(produto, "oferta-padrao", provider="fallback", seed=1)
+        self.assertIn("🔴 Mouse Sem Fio K7 | Branco 🔴", copy["body"])
+
+    def test_titulo_sem_separador_nao_gera_linha_de_specs(self):
+        produto = dict(PRODUTO_VERIFIED, title="FoneBluetoothXYZ")
+        copy = gerar_copy(produto, "oferta-padrao", provider="fallback", seed=1)
+        self.assertNotIn("🔴", copy["body"])
+
+    def test_disclaimer_e_o_texto_de_apoio_ao_canal(self):
+        copy = gerar_copy(PRODUTO_VERIFIED, "oferta-padrao", provider="fallback", seed=1)
+        self.assertIn("ajuda o Canal Topfy", copy["disclaimer"])
+
 
 class EscolherImagemLimpaTests(unittest.TestCase):
     """Checagem de imagem via IA de visão — opt-in (IMAGE_QUALITY_CHECK_

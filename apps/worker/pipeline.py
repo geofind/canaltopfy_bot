@@ -28,7 +28,7 @@ import urllib.request
 import uuid
 from datetime import datetime, time, timezone, timedelta
 from typing import Any, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 import db
 from connectors import CredencialNaoConfigurada
@@ -134,20 +134,41 @@ IMPORT_FIELD_MAP = {
 
 
 def descobrir_produtos_aliexpress(termos: list[str], *,
-                                  max_por_termo: int = 3) -> list[dict[str, Any]]:
+                                  max_por_termo: int = 3,
+                                  paginas: int = 5,
+                                  pagina_maxima: int = 50,
+                                  sortear_pagina: Any = random.randint
+                                  ) -> list[dict[str, Any]]:
     """Busca produtos reais na API oficial da AliExpress (aliexpress.
     affiliate.product.query) por palavra-chave — é o "capturar" do modo
     100% automático (opt-in): nunca inventa produto, cada resultado já
     vem da API com method='API'/source_confidence conforme a resposta
-    real. Falha de credencial/rede num termo não derruba os outros."""
+    real. Falha de credencial/rede num termo não derruba os outros.
+
+    Cada termo começa de uma página ALEATÓRIA (1 a pagina_maxima), não
+    sempre a página 1 — sem isso, todo ciclo repetia o mesmo topo do
+    resultado (já dedupado) e o "combustível" de produto novo acabava
+    rápido. Sortear a página cobre partes diferentes e mais fundas do
+    catálogo ciclo após ciclo, sem precisar lembrar estado entre
+    execuções. Termos genéricos têm dezenas de páginas de resultado na
+    AliExpress; `dedupe` por source_url em ciclo_automatico evita
+    reimportar o que já foi visto."""
     conector = AliExpressConnector()
     encontrados: list[dict[str, Any]] = []
     for termo in termos:
-        try:
-            resultados = conector.search_offers(termo)
-        except (CredencialNaoConfigurada, RuntimeError):
-            continue
-        encontrados.extend(resultados[:max_por_termo])
+        inicio = sortear_pagina(1, pagina_maxima)
+        coletados = 0
+        for pagina in range(inicio, inicio + paginas):
+            try:
+                resultados = conector.search_offers(termo, page_no=pagina)
+            except (CredencialNaoConfigurada, RuntimeError):
+                break
+            if not resultados:
+                break  # AliExpress acabou os resultados desse termo
+            encontrados.extend(resultados)
+            coletados += len(resultados)
+            if coletados >= max_por_termo * paginas:
+                break
     return encontrados
 
 
@@ -165,7 +186,8 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
     passar fica só registrado no audit_log; dedupe por source_url evita
     reimportar o mesmo produto em ciclos seguintes."""
     criados: list[dict[str, Any]] = []
-    for produto_bruto in descobrir_produtos_aliexpress(termos):
+    for produto_bruto in descobrir_produtos_aliexpress(
+            termos, max_por_termo=20, paginas=5):
         if len(criados) >= max_novos:
             break
         source_url = produto_bruto.get("canonical_url")
@@ -501,7 +523,7 @@ def completar_link_mercadolivre_assistido(
         "affiliate_link_status": "VERIFIED",
     })
     db.register_audit(
-        organization_id, actor_type="agent",
+        organization_id, actor_type="worker",
         action="mercadolivre_link_oficial_confirmado", entity_type="product",
         entity_id=str(produto["id"]),
         metadata={"method": "HERMES_ASSISTED", "affiliate_url": link})
@@ -560,7 +582,7 @@ def completar_link_mercadolivre_assistido(
             raise ValueError("nenhuma copy válida para aprovação automática")
         escolhido = validos[0]
         approve_campaign(campaign_id, [str(escolhido["id"])],
-                         actor_type="agent")
+                         actor_type="worker")
         resultado.update({"content_id": str(escolhido["id"]),
                           "status": "APPROVED"})
         if queue_id:
@@ -579,7 +601,7 @@ def completar_link_mercadolivre_assistido(
             resultado.update({"queue_id": queue_id, "status": "SCHEDULED"})
 
     db.register_audit(
-        organization_id, actor_type="agent",
+        organization_id, actor_type="worker",
         action="mercadolivre_fluxo_assistido_preparado",
         entity_type="campaign", entity_id=campaign_id,
         metadata={"auto_approve": auto_approve, "queue_id": queue_id,
@@ -635,22 +657,27 @@ def publish_to_telegram(campaign_id: str, content_id: str,
     pub_id = pub["id"]
 
     try:
-        base_url = os.environ.get(
-            "CANALTOPFY_PUBLIC_BASE_URL", "http://localhost:3000")
-        redirect_url = f"{base_url}/r/{pub_id}"
-        card_url = f"{base_url}/og/card/{campaign_id}"
         produto = db.get_product(campanha["product_id"])
-        if produto:
-            imagem = imagem_para_post(produto)
-            if imagem:
-                card_url += f"?img={quote(imagem, safe='')}"
+        if not produto:
+            raise ValueError(f"produto da campanha {campaign_id} não encontrado")
+        # Link final de afiliado direto no post (não mais o redirect /r/<id>
+        # do Topfy) — pedido explícito: o link visível precisa ser o link
+        # real da loja, não um encurtador nosso por cima.
+        link_afiliado = (produto.get("affiliate_link") or "").strip()
+        if not link_afiliado or link_afiliado == "PENDING_OFFICIAL_TOOL":
+            raise ValueError(
+                f"campanha {campaign_id} ainda não tem link de afiliado "
+                "real gerado — não publica com link pendente/ausente")
+        # Foto real do produto direto na mensagem (sem card renderizado):
+        # mais simples e replicável, no formato usado pela concorrência.
+        imagem_url = imagem_para_post(produto)
         copy = _load_content(content_id)
         copy["cta"] = sortear_cta(campanha.get("organization_id"))
         resultado = publicar_oferta_telegram(
             copy=copy,
             chat_id=chat_destino,
-            redirect_url=redirect_url,
-            image_url=card_url,
+            redirect_url=link_afiliado,
+            image_url=imagem_url,
         )
     except Exception as exc:
         mark_publication_result(pub_id, {"status": "FAILED", "error": str(exc)})
@@ -815,6 +842,13 @@ def _parse_iso(iso: str) -> datetime:
 
 
 def _load_content(content_id: str) -> dict[str, Any]:
+    """Reconstrói o dict de copy a partir do texto persistido (montar_copy_
+    text junta headline/body/cta/disclaimer com "\\n\\n" — body pode ter
+    várias linhas internas também separadas por "\\n\\n", então só as
+    duas ÚLTIMAS partes são cta/disclaimer; o resto (menos a primeira,
+    headline) é o body). `cta` é sobrescrito depois por sortear_cta em
+    publish_to_telegram — mas o disclaimer só existe aqui: sem
+    reconstruir os dois, a publicação real saía sem CTA nem disclaimer."""
     resp = db._get().table("contents").select("*").eq("id", content_id).maybe_single().execute()
     if not resp.data:
         raise ValueError(f"content {content_id} não encontrado")
@@ -822,13 +856,17 @@ def _load_content(content_id: str) -> dict[str, Any]:
     headline = partes[0] if partes else ""
     if len(partes) >= 4:  # headline / body / cta / disclaimer
         body = "\n\n".join(partes[1:-2])
+        cta = partes[-2]
+        disclaimer = partes[-1]
     else:
         body = resp.data.get("copy_text", "")
+        cta = ""
+        disclaimer = ""
     return {
         "headline": headline,
         "body": body,
-        "cta": "",
-        "disclaimer": "",
+        "cta": cta,
+        "disclaimer": disclaimer,
     }
 
 
