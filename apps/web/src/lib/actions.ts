@@ -1380,3 +1380,21 @@ export async function removeDiscoveryBlockword(blockId: string) {
     .eq("organization_id", organizationId);
   revalidatePath("/campanhas");
 }
+
+// ------------------------------------------------------------------
+// Armazenamento (/sistema): limpeza manual do cache local de imagens —
+// nunca automática, só por este botão.
+// ------------------------------------------------------------------
+
+export async function triggerCacheCleanup() {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return;
+
+  await supabase.from("jobs").insert({
+    organization_id: organizationId,
+    type: "cache.cleanup",
+    payload: {},
+  });
+  revalidatePath("/sistema");
+}
