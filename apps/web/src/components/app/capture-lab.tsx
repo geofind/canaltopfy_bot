@@ -331,8 +331,9 @@ export function CaptureLab({
             <p className="eyebrow">Corte de score</p>
             <h2 className="mt-1 text-xl font-bold">Score mínimo para aprovar sozinho</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Abaixo deste Topfy Score (0–100) a oferta é descartada e só fica no histórico de
-              candidatos. Cada categoria pode sobrepor este corte.
+              Abaixo deste Topfy Score (0–100, ou mais em categorias com prioridade de mais
+              vendidos) a oferta é descartada e só fica no histórico de candidatos. Cada
+              categoria pode sobrepor este corte.
             </p>
           </div>
           <Badge variant={targetPercentTotal > 100 ? "destructive" : "outline"}>
