@@ -83,6 +83,42 @@ class MontarMensagemTests(unittest.TestCase):
         self.assertTrue(msg.rstrip().endswith(f"<i>{COPY['disclaimer']}</i>"))
 
 
+class LimiteLegendaTests(unittest.TestCase):
+    """Regressão: o sendPhoto do Telegram rejeita caption com mais de 1024
+    caracteres (HTTP 400 "message caption is too long"); a legenda tem que
+    ser reduzida sempre preservando o link de afiliado (onde o clique
+    acontece) e o disclaimer."""
+
+    COPY_LONGA = {
+        "headline": "Headline muito longa " * 10,
+        "body": " ".join([f"palavra{m}" for m in range(400)]),
+        "cta": "Aproveite essa oferta incrível agora! " * 20,
+        "disclaimer": "Parceria com a loja via link de afiliado.",
+    }
+
+    def test_legenda_limita_a_1024(self):
+        msg = telegram._montar_mensagem(self.COPY_LONGA, "https://x/r/1")
+        self.assertLessEqual(len(msg), telegram.MAX_CAPTION_CHARS)
+
+    def test_link_e_disclaimer_preservados(self):
+        msg = telegram._montar_mensagem(self.COPY_LONGA, "https://x/r/link-final")
+        self.assertIn("🔗 https://x/r/link-final", msg)
+        self.assertTrue(msg.rstrip().endswith(
+            f"<i>{self.COPY_LONGA['disclaimer']}</i>"))
+
+    def test_texto_curto_nao_e_cortado(self):
+        msg = telegram._montar_mensagem(COPY, "https://x/r/1")
+        self.assertIn("Produto X", msg)
+        self.assertIn(COPY["body"], msg)
+        self.assertLessEqual(len(msg), telegram.MAX_CAPTION_CHARS)
+
+    def test_truncar_nao_deixa_entidade_html_cortada(self):
+        texto = "&amp;" * 300  # 1200 chars escapados — quebra depois do &amp; do meio
+        corpo = telegram._truncar_html_seguro(texto, 200)
+        self.assertFalse(corpo.rstrip("…").endswith("&"))
+        self.assertLessEqual(len(corpo), 200)
+
+
 class DetectarTipoImagemTests(unittest.TestCase):
     """Foto real do produto (sem card renderizado) pode vir em qualquer
     formato da CDN da loja — o multipart do sendPhoto precisa declarar o

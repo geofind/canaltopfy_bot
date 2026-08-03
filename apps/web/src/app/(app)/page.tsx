@@ -11,6 +11,7 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { LiveCampaignFlow } from "@/components/app/live-campaign-flow";
 import { PublicationCountdown } from "@/components/app/publication-countdown";
+import { comissaoEstimadaPorUnidade } from "@/lib/commission";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,8 @@ type Product = {
   discount_pct?: number | null;
   score?: number | null;
   discounted_price_brl?: number | null;
+  commission_pct?: number | null;
+  commission_brl?: number | null;
   collected_at?: string | null;
 };
 
@@ -125,7 +128,7 @@ export default async function DashboardPage() {
     supabase
       .from("campaigns")
       .select(
-        "id, status, created_at, product:products(id, title, source_name, category, discount_pct, score, discounted_price_brl, collected_at)",
+        "id, status, created_at, product:products(id, title, source_name, category, discount_pct, score, discounted_price_brl, commission_pct, commission_brl, collected_at)",
       )
       .order("created_at", { ascending: false })
       .limit(120),
@@ -350,7 +353,9 @@ export default async function DashboardPage() {
 
         <div className="overflow-hidden rounded-2xl border bg-white shadow-soft-sm">
           {recentOffers.length ? (
-            recentOffers.map(({ campaign, product }, index) => (
+            recentOffers.map(({ campaign, product }, index) => {
+              const comissao = comissaoEstimadaPorUnidade(product);
+              return (
               <Link
                 key={campaign.id}
                 href={`/campanhas/${campaign.id}`}
@@ -365,6 +370,14 @@ export default async function DashboardPage() {
                   </p>
                   <p className="mt-1 text-[10px] text-muted-foreground">
                     {sourceLabel(product.source_name)} · score {Math.round(numberValue(product.score))} · {formatMoney(product.discounted_price_brl)}
+                    {comissao != null && (
+                      <>
+                        {" · "}
+                        <span className="font-bold text-emerald-700">
+                          comissão {formatMoney(comissao)}/un.
+                        </span>
+                      </>
+                    )}
                   </p>
                 </div>
                 <span className="w-fit rounded-full bg-[#D71931] px-3 py-1 text-xs font-black text-white">
@@ -372,7 +385,8 @@ export default async function DashboardPage() {
                 </span>
                 <ArrowUpRight className="hidden size-4 text-muted-foreground sm:block" aria-hidden="true" />
               </Link>
-            ))
+              );
+            })
           ) : (
             <p className="p-10 text-center text-sm text-muted-foreground">
               Nenhuma oferta com desconto confirmado foi encontrada ainda.

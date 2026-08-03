@@ -22,6 +22,7 @@ from connectors import CredencialNaoConfigurada
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 MAX_TENTATIVAS = 3
+MAX_CAPTION_CHARS = 1024
 
 
 def _token() -> Optional[str]:
@@ -201,21 +202,67 @@ def _escapar_html(texto: str) -> str:
     return (texto.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def _montar_mensagem(copy: dict[str, Any], link_url: str) -> str:
+def _montar_mensagem(
+    copy: dict[str, Any],
+    link_url: str,
+    *,
+    max_chars: int = MAX_CAPTION_CHARS,
+) -> str:
     """Monta a legenda — link final por EXTENSO (texto visível com 🔗,
     não mais escondido atrás de um texto de CTA): o Telegram já
     auto-linkifica URL em texto puro, e fica no padrão dos canais de
-    review (link sempre visível, nunca só um botão)."""
-    headline = copy.get("headline") or ""
-    body = copy.get("body") or ""
-    cta = (copy.get("cta") or "").strip()
-    disclaimer = copy.get("disclaimer") or ""
-    blocos = [f"<b>{_escapar_html(headline)}</b>", _escapar_html(body)]
+    review (link sempre visível, nunca só um botão).
+
+    Limita a legenda a `max_chars` (capacidade do sendPhoto, 1024):
+    se o texto passar, encolhe o corpo primeiro, depois CTA, depois
+    cabeçalho e disclaimer — sempre preservando o link de afiliado,
+    que é o único conteúdo inegociável (é onde o clique acontece)."""
+    headline = _escapar_html(copy.get("headline") or "")
+    body = _escapar_html(copy.get("body") or "")
+    cta = _escapar_html((copy.get("cta") or "").strip())
+    disclaimer = _escapar_html(copy.get("disclaimer") or "")
+
+    blocos: list[str] = [f"<b>{headline}</b>", body, f"🔗 {_escapar_html(link_url)}"]
     if cta:
-        blocos.append(_escapar_html(cta))
-    blocos.append(f"🔗 {_escapar_html(link_url)}")
-    blocos.append(f"<i>{_escapar_html(disclaimer)}</i>")
-    return "\n\n".join(blocos)
+        blocos.insert(2, cta)
+    if disclaimer:
+        blocos.append(f"<i>{disclaimer}</i>")
+
+    def tamanho(itens: list[str]) -> int:
+        return len("\n\n".join(itens))
+
+    posicao_link = next(i for i, bloco in enumerate(blocos) if bloco.startswith("🔗"))
+    iteracoes = 0
+    while tamanho(blocos) > max_chars and iteracoes < 12:
+        candidatos = [
+            i for i, bloco in enumerate(blocos)
+            if i != posicao_link and bloco and not bloco.startswith("<i>")]
+        if not candidatos:
+            break
+        i = max(candidatos, key=lambda j: len(blocos[j]))
+        alvo = max(0, round(len(blocos[i]) / 2))
+        if blocos[i].startswith("<b>") and blocos[i].endswith("</b>"):
+            interior = _truncar_html_seguro(blocos[i][3:-4], max(0, alvo - 7))
+            blocos[i] = f"<b>{interior}</b>" if interior else ""
+        else:
+            blocos[i] = _truncar_html_seguro(blocos[i], alvo)
+        iteracoes += 1
+
+    return "\n\n".join(bloco for bloco in blocos if bloco)
+
+
+def _truncar_html_seguro(texto: str, limite: int) -> str:
+    """Encurta texto HTML escapado sem deixar uma entidade (`&amp;`, `&lt;`…)
+    cortada pela metade — entidade quebrada vira erro de parse no Telegram."""
+    if limite <= 0:
+        return ""
+    if len(texto) <= limite:
+        return texto
+    corte = texto[:limite]
+    amp = corte.rfind("&")
+    if amp != -1 and "; " not in corte[amp + 1:]:
+        corte = corte[:amp]
+    return corte.rstrip() + "…"
 
 
 def publicar_oferta_telegram(

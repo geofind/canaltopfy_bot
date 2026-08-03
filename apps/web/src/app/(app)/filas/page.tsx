@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { QueueForm } from "@/components/app/divulgacao-forms";
 import { QueueEditor, type QueueEditorItem } from "@/components/app/queue-editor";
 import { toggleQueue, deleteQueue } from "@/lib/actions";
+import { comissaoEstimadaPorUnidade } from "@/lib/commission";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,8 @@ type ProductRow = {
   category: string | null;
   score: number | null;
   discounted_price_brl: number | null;
+  commission_pct: number | null;
+  commission_brl: number | null;
   discount_pct: number | null;
 };
 
@@ -73,7 +76,7 @@ export default async function FilasPage() {
       .from("queue_items")
       .select(
         "id, queue_id, campaign_id, content_id, scheduled_at, " +
-        "campaign:campaigns(id, title, product:products(source_name, category, score, discounted_price_brl, discount_pct)), " +
+        "campaign:campaigns(id, title, product:products(source_name, category, score, discounted_price_brl, commission_pct, commission_brl, discount_pct)), " +
         "content:contents(id, copy_text)",
       )
       .eq("status", "PENDING")
@@ -264,6 +267,7 @@ export default async function FilasPage() {
                   score: product?.score == null ? null : Number(product.score),
                   price: product?.discounted_price_brl == null
                     ? null : Number(product.discounted_price_brl),
+                  commission: comissaoEstimadaPorUnidade(product),
                   discount: product?.discount_pct == null
                     ? null : Number(product.discount_pct),
                 };

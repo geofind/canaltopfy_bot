@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { apiFamilyKeyForCategory } from "@/lib/category-families";
+import { comissaoEstimadaPorUnidade, formatMoneyBRL } from "@/lib/commission";
 import { CaptureLab } from "@/components/app/capture-lab";
 import type {
   CaptureLabBlockword,
@@ -89,7 +90,10 @@ export default async function CampanhasPage({ searchParams }: CampanhasPageProps
   const supabase = await createClient();
   const { data: campanhas, count, error } = await supabase
     .from("campaigns")
-    .select("id, title, status, platform, created_at", { count: "exact" })
+    .select(
+      "id, title, status, platform, created_at, product:products(discounted_price_brl, commission_pct, commission_brl)",
+      { count: "exact" },
+    )
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .range(from, from + PAGE_SIZE - 1);
@@ -496,6 +500,7 @@ export default async function CampanhasPage({ searchParams }: CampanhasPageProps
                 <tr>
                   <th className="px-5 py-3 font-black">Título</th>
                   <th className="px-5 py-3 font-black">Plataforma</th>
+                  <th className="px-5 py-3 font-black">Comissão estimada</th>
                   <th className="px-5 py-3 font-black">Status</th>
                   <th className="px-5 py-3 font-black">Criada em</th>
                 </tr>
@@ -514,6 +519,12 @@ export default async function CampanhasPage({ searchParams }: CampanhasPageProps
                     <td className="px-5 py-4">
                       <span className="rounded-full border bg-white px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
                         {campaign.platform}
+                      </span>
+                    </td>
+                    <td className="px-5 py-4">
+                      <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-emerald-700">
+                        {formatMoneyBRL(comissaoEstimadaPorUnidade(campaign.product))}
+                        <span className="text-[10px] font-semibold text-muted-foreground">/un.</span>
                       </span>
                     </td>
                     <td className="px-5 py-4">

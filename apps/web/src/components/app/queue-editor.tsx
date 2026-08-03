@@ -39,6 +39,7 @@ export type QueueEditorItem = {
   category: string | null;
   score: number | null;
   price: number | null;
+  commission: number | null;
   discount: number | null;
 };
 
@@ -360,6 +361,14 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
                           <Clock3 className="size-3.5" /> {formatDate(item.scheduledAt)}
                         </span>
                         <span>{formatMoney(item.price)}</span>
+                        {item.commission != null && (
+                          <span
+                            className="inline-flex items-center gap-1.5 font-bold text-emerald-700"
+                            title="Comissão estimada por unidade vendida"
+                          >
+                            comissão {formatMoney(item.commission)}/un.
+                          </span>
+                        )}
                         {item.category && <span className="truncate">{item.category}</span>}
                       </div>
                     </div>
