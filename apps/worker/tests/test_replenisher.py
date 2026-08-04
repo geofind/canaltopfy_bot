@@ -277,6 +277,131 @@ class ReplenishOnceTests(unittest.TestCase):
         self.assertEqual(enqueue.call_count, 2)
         register_audit.assert_called_once()
 
+    @mock.patch.object(replenisher.db, "register_audit")
+    @mock.patch.object(replenisher, "randomize_pending_schedule",
+                       return_value={"randomized": 0})
+    @mock.patch.object(replenisher, "_request_hermes_links", return_value=0)
+    @mock.patch.object(replenisher, "_ml_candidates", return_value=[])
+    @mock.patch.object(replenisher, "ciclo_automatico")
+    @mock.patch.object(replenisher, "_enqueue_campaigns", return_value=[])
+    @mock.patch.object(replenisher, "_ready_inventory", return_value=[])
+    @mock.patch.object(replenisher, "_active_items")
+    def test_limita_termos_de_rede_mas_nao_o_catalogo_local_do_magalu(
+            self, active, inventory, enqueue, cycle, ml_candidates,
+            request_hermes, randomize, register_audit):
+        """AliExpress/Shopee fazem 1 request real por página por termo —
+        com dezenas de termos e a API lenta, um ciclo já ficou preso por
+        muito tempo e travou o reabastecimento inteiro. Magalu é local
+        (catálogo em disco), não tem esse risco e continua recebendo a
+        lista inteira."""
+        active.side_effect = [
+            [{"id": index} for index in range(10)],
+            [{"id": index} for index in range(10)],
+        ]
+        cycle.return_value = {"campanhas": []}
+        muitos_termos = tuple(f"termo{i}" for i in range(60))
+
+        replenisher.replenish_once(
+            config(terms=muitos_termos),
+            now=datetime(2026, 8, 3, tzinfo=timezone.utc))
+
+        chamadas_por_fonte = {
+            call.kwargs["source_name"]: call.kwargs["termos"]
+            for call in cycle.call_args_list
+        }
+        for fonte in ("shopee", "aliexpress"):
+            if fonte in chamadas_por_fonte:
+                self.assertLessEqual(
+                    len(chamadas_por_fonte[fonte]),
+                    replenisher.REDE_TERMOS_POR_CICLO)
+        if "magalu" in chamadas_por_fonte:
+            self.assertEqual(len(chamadas_por_fonte["magalu"]), len(muitos_termos))
+
+
+class _ProductsQueryVerified:
+    """Fake da tabela `products` pro cenário de _ready_inventory: aceita a
+    cadeia select/eq/eq/not_.is_ usada de verdade e devolve uma lista fixa
+    de produtos "verificados", sem filtrar (os filtros reais são no banco;
+    aqui só interessa o volume pra testar o particionamento)."""
+
+    def __init__(self, produtos):
+        self._produtos = produtos
+
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+
+    @property
+    def not_(self):
+        return self
+
+    def is_(self, *a, **k): return self
+
+    def execute(self):
+        resp = mock.MagicMock()
+        resp.data = self._produtos
+        return resp
+
+
+class _CampaignsQueryRecordsChunks:
+    """Fake da tabela `campaigns`: grava cada bloco de product_id recebido
+    via `.in_("product_id", bloco)` pra provar que nenhum bloco passa de
+    IN_CHUNK — o bug real (issue "JSON could not be generated" do
+    PostgREST) só aparece quando um único IN carrega centenas de UUIDs."""
+
+    def __init__(self):
+        self.chunks_recebidos: list[list[str]] = []
+
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+
+    def in_(self, campo, valores):
+        if campo == "product_id":
+            self.chunks_recebidos.append(list(valores))
+        return self
+
+    def execute(self):
+        resp = mock.MagicMock()
+        resp.data = []
+        return resp
+
+
+class ReadyInventoryChunkingTests(unittest.TestCase):
+    """_ready_inventory alimenta o reabastecedor com campanhas já
+    verificadas — em produção, sem retenção nos produtos, essa lista já
+    passou de 600 e um `.in_("product_id", [...])` com todos de uma vez
+    estourava o limite de tamanho de URL da API do Supabase (erro cru
+    "JSON could not be generated"/400, travando o reabastecedor inteiro
+    em todo ciclo). A correção quebra a consulta em blocos de IN_CHUNK."""
+
+    def test_particiona_produtos_verificados_em_blocos_de_ate_in_chunk(self):
+        total_produtos = replenisher.IN_CHUNK + 50
+        produtos = [
+            {"id": f"p{i}", "source_name": "aliexpress", "score": 10,
+             "created_at": "2026-01-01T00:00:00+00:00", "title": f"Produto {i}",
+             "category": "Cat"}
+            for i in range(total_produtos)
+        ]
+        campanhas_query = _CampaignsQueryRecordsChunks()
+        tabelas = {
+            "products": _ProductsQueryVerified(produtos),
+            "campaigns": campanhas_query,
+        }
+        client = mock.MagicMock()
+        client.table.side_effect = lambda nome: tabelas[nome]
+
+        cfg = replenisher.ReplenisherConfig(
+            organization_id="org1", queue_id="queue1", terms=("x",))
+        with mock.patch.object(replenisher.db, "_get", return_value=client):
+            resultado = replenisher._ready_inventory(cfg, 5)
+
+        self.assertEqual(resultado, [])
+        self.assertGreater(len(campanhas_query.chunks_recebidos), 1)
+        self.assertTrue(all(
+            len(bloco) <= replenisher.IN_CHUNK
+            for bloco in campanhas_query.chunks_recebidos))
+        ids_recebidos = sum(len(bloco) for bloco in campanhas_query.chunks_recebidos)
+        self.assertEqual(ids_recebidos, total_produtos)
+
 
 class _FakeQuery:
     """Encadeamento de query PostgREST mínimo, uma instância por tabela."""

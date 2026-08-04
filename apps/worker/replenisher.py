@@ -26,6 +26,23 @@ from offer_rules import (avoid_consecutive_categories, category_family,
                          redistribute_by_category_targets)
 from pipeline import ciclo_automatico, validar_link_afiliado_ml
 
+# AliExpress/Shopee fazem 1 chamada HTTP real (timeout de 10-15s) por
+# página por termo — com a lista inteira de termos (pode passar de 150)
+# um único ciclo já viu ficar preso por dezenas de minutos quando a API
+# está lenta, travando o reabastecimento (a fila esvaziava e não
+# recuperava porque nenhum ciclo novo conseguia rodar). O Magalu não
+# entra nesse limite: busca é local (catálogo em disco), sem rede.
+REDE_TERMOS_POR_CICLO = 40
+
+# PostgREST recusa cláusulas `in.(...)` com muitos valores (acima de ~500
+# UUIDs dá "JSON could not be generated" 400). Consultas filtradas por uma
+# lista grande de ids são quebradas em blocos menores.
+IN_CHUNK = 200
+
+
+def _chunks(values: list[str], size: int = IN_CHUNK) -> list[list[str]]:
+    return [values[i:i + size] for i in range(0, len(values), size)]
+
 
 @dataclass(frozen=True)
 class ReplenisherConfig:
@@ -475,12 +492,14 @@ def _ready_inventory(config: ReplenisherConfig, limit: int, *,
     by_product = {str(row["id"]): row for row in products}
     if not by_product:
         return []
-    campaigns = (db._get().table("campaigns")
-                 .select("id,product_id,status,created_at")
-                 .eq("organization_id", config.organization_id)
-                 .in_("product_id", list(by_product))
-                 .in_("status", ["READY", "APPROVED", "SCHEDULED"])
-                 .execute().data or [])
+    campaigns: list[dict[str, Any]] = []
+    for chunk in _chunks(list(by_product)):
+        campaigns.extend((db._get().table("campaigns")
+                          .select("id,product_id,status,created_at")
+                          .eq("organization_id", config.organization_id)
+                          .in_("product_id", chunk)
+                          .in_("status", ["READY", "APPROVED", "SCHEDULED"])
+                          .execute().data or []))
     inventory: list[dict[str, Any]] = []
     for campaign in campaigns:
         campaign_id = str(campaign["id"])
@@ -541,11 +560,14 @@ def _ml_candidates(config: ReplenisherConfig, limit: int) -> list[dict[str, str]
     if not products:
         return []
     by_product = {str(row["id"]): row for row in products}
-    campaigns = (db._get().table("campaigns")
-                 .select("id,product_id,status")
-                 .eq("organization_id", config.organization_id)
-                 .eq("status", "READY").in_("product_id", list(by_product))
-                 .execute().data or [])
+    campaigns: list[dict[str, Any]] = []
+    for chunk in _chunks(list(by_product)):
+        campaigns.extend((db._get().table("campaigns")
+                          .select("id,product_id,status")
+                          .eq("organization_id", config.organization_id)
+                          .eq("status", "READY")
+                          .in_("product_id", chunk)
+                          .execute().data or []))
     candidates: list[dict[str, str]] = []
     for campaign in campaigns:
         campaign_id = str(campaign["id"])
@@ -690,8 +712,11 @@ def replenish_once(config: ReplenisherConfig,
             quota = quotas[source]
             if quota <= 0:
                 continue
+            termos_ciclo = (
+                terms[:REDE_TERMOS_POR_CICLO]
+                if source in ("shopee", "aliexpress") else terms)
             result = ciclo_automatico(
-                config.organization_id, termos=terms,
+                config.organization_id, termos=termos_ciclo,
                 min_score=config.min_score, max_novos=quota,
                 queue_id=None, source_name=source,
                 min_discount_pct=10 if source == "shopee" else None)
