@@ -8,6 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/app/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -129,15 +130,14 @@ export default async function IntegracoesPage() {
 
   return (
     <div className="space-y-8">
-      <div className="space-y-1">
-        <p className="eyebrow">Conexões</p>
-        <h1 className="text-2xl font-semibold tracking-tight">Integrações</h1>
-        <p className="text-sm text-muted-foreground">
-          Conexões usadas pelo pipeline de importação e publicação.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Conexões"
+        title="Integrações"
+        description="Conexões usadas pelo pipeline de importação e publicação."
+        statusTone={workerOnline ? "ok" : "warn"}
+      />
 
-      <Card>
+      <Card className="shadow-soft-sm">
         <CardHeader>
           <CardTitle>Mercado Livre</CardTitle>
           <CardDescription>
@@ -166,7 +166,7 @@ export default async function IntegracoesPage() {
             <form action={connectMercadoLivre}>
               <button
                 type="submit"
-                className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                className="inline-flex h-9 items-center justify-center rounded-[9px] bg-primary px-4 text-sm font-bold text-primary-foreground transition-colors hover:bg-primary/90"
               >
                 {mlConectado ? "Reconectar" : "Conectar"}
               </button>
@@ -175,7 +175,7 @@ export default async function IntegracoesPage() {
               <form action={disconnectMercadoLivre}>
                 <button
                   type="submit"
-                  className="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium text-destructive transition-colors hover:bg-muted"
+                  className="inline-flex h-9 items-center justify-center rounded-[9px] border border-input bg-background px-4 text-sm font-medium text-destructive transition-colors hover:bg-muted"
                 >
                   Desconectar
                 </button>
@@ -185,7 +185,7 @@ export default async function IntegracoesPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="shadow-soft-sm">
         <CardHeader>
           <CardTitle>AliExpress</CardTitle>
           <CardDescription>
@@ -248,7 +248,7 @@ export default async function IntegracoesPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="shadow-soft-sm">
         <CardHeader>
           <CardTitle>Shopee</CardTitle>
           <CardDescription>
@@ -299,7 +299,7 @@ export default async function IntegracoesPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="shadow-soft-sm">
         <CardHeader>
           <CardTitle>Magalu</CardTitle>
           <CardDescription>
@@ -346,7 +346,7 @@ export default async function IntegracoesPage() {
               href={magaluStorefrontUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              className="inline-flex h-9 items-center justify-center rounded-[9px] bg-primary px-4 text-sm font-bold text-primary-foreground transition-colors hover:bg-primary/90"
             >
               Abrir minha vitrine
             </a>
@@ -354,7 +354,7 @@ export default async function IntegracoesPage() {
               href={magaluCouponsUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium transition-colors hover:bg-muted"
+              className="inline-flex h-9 items-center justify-center rounded-[9px] border border-input bg-background px-4 text-sm font-medium transition-colors hover:bg-muted"
             >
               Ver cupons Magalu
             </a>
@@ -368,7 +368,7 @@ export default async function IntegracoesPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="shadow-soft-sm">
         <CardHeader>
           <CardTitle>Telegram</CardTitle>
           <CardDescription>

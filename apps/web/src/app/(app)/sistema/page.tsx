@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/app/page-header";
 import { triggerCacheCleanup } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
@@ -83,54 +84,52 @@ export default async function SystemPage() {
 
   return (
     <div className="space-y-8">
-      <div className="space-y-1">
-        <p className="eyebrow">Operação</p>
-        <h1 className="text-2xl font-semibold tracking-tight">Sistema</h1>
-        <p className="text-sm text-muted-foreground">
-          Saúde do worker (fila de jobs) — o worker consome a fila do banco
-          a cada 5s quando está rodando.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Operação"
+        title="Sistema"
+        description="Saúde do worker (fila de jobs) — o worker consome a fila do banco a cada 5s quando está rodando."
+        statusTone={failed > 0 ? "warn" : "ok"}
+      />
 
       <div className="grid gap-4 sm:grid-cols-4">
-        <Card>
+        <Card className="shadow-soft-sm">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Pendentes
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-semibold">{pending}</p>
+            <p className="font-display text-3xl font-bold">{pending}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="shadow-soft-sm">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Em execução
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-semibold">{running}</p>
+            <p className="font-display text-3xl font-bold">{running}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="shadow-soft-sm">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Concluídos
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-semibold">{done}</p>
+            <p className="font-display text-3xl font-bold">{done}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="shadow-soft-sm">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Falhas
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-semibold">{failed}</p>
+            <p className="font-display text-3xl font-bold">{failed}</p>
           </CardContent>
         </Card>
       </div>
@@ -147,7 +146,7 @@ export default async function SystemPage() {
       <div className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold">Armazenamento</h2>
+            <h2 className="text-xl font-bold">Armazenamento</h2>
             <p className="text-sm text-muted-foreground">
               Nuvem (Supabase) e disco do worker. A limpeza do cache local é sempre manual.
             </p>
@@ -160,14 +159,14 @@ export default async function SystemPage() {
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Banco de dados (nuvem)
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-semibold">{formatBytes(databaseSizeBytes)}</p>
+              <p className="font-display text-2xl font-bold">{formatBytes(databaseSizeBytes)}</p>
               {topTables.length > 0 && (
                 <ul className="mt-3 space-y-1 text-xs text-muted-foreground">
                   {topTables.map((row) => (
@@ -181,7 +180,7 @@ export default async function SystemPage() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Disco do worker
@@ -190,7 +189,7 @@ export default async function SystemPage() {
             <CardContent>
               {diskUsage ? (
                 <>
-                  <p className="text-2xl font-semibold">
+                  <p className="font-display text-2xl font-bold">
                     {formatBytes(diskUsage.used_bytes)}{" "}
                     <span className="text-sm font-normal text-muted-foreground">
                       de {formatBytes(diskUsage.total_bytes)}
@@ -214,14 +213,14 @@ export default async function SystemPage() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Cache local de imagens
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-semibold">
+              <p className="font-display text-2xl font-bold">
                 {formatBytes(imageCacheUsage?.bytes ?? 0)}
               </p>
               <p className="mt-2 text-xs text-muted-foreground">
@@ -234,16 +233,16 @@ export default async function SystemPage() {
       </div>
 
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Jobs recentes</h2>
+        <h2 className="text-xl font-bold">Jobs recentes</h2>
         {!jobs || jobs.length === 0 ? (
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardContent className="py-12 text-center text-sm text-muted-foreground">
               Nenhum job ainda — crie uma campanha para enfileirar o
               processamento.
             </CardContent>
           </Card>
         ) : (
-          <div className="overflow-hidden rounded-md border">
+          <div className="overflow-hidden rounded-xl border bg-white shadow-soft-sm">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
                 <tr>
@@ -281,16 +280,16 @@ export default async function SystemPage() {
       </div>
 
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Atividade do worker</h2>
+        <h2 className="text-xl font-bold">Atividade do worker</h2>
         {!events || events.length === 0 ? (
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardContent className="py-12 text-center text-sm text-muted-foreground">
               O worker ainda não registrou eventos — ele deve estar parado.
               Suba em apps/worker com `python -m main`.
             </CardContent>
           </Card>
         ) : (
-          <div className="overflow-hidden rounded-md border">
+          <div className="overflow-hidden rounded-xl border bg-white shadow-soft-sm">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
                 <tr>

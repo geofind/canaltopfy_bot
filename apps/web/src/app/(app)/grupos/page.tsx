@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/app/page-header";
 import { ChannelGroupForm, GroupMessageForm } from "@/components/app/divulgacao-forms";
 import { deleteChannelGroup } from "@/lib/actions";
 
@@ -23,20 +24,17 @@ export default async function GruposPage() {
 
   return (
     <div className="space-y-8">
-      <div className="space-y-1">
-        <p className="eyebrow">Divulgação</p>
-        <h1 className="text-2xl font-semibold tracking-tight">Grupos</h1>
-        <p className="text-sm text-muted-foreground">
-          Canais e grupos do Telegram onde as ofertas são publicadas. Cadastre
-          uma vez e reutilize em filas, agendamentos e disparos manuais.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Divulgação"
+        title="Grupos"
+        description="Canais e grupos do Telegram onde as ofertas são publicadas. Cadastre uma vez e reutilize em filas, agendamentos e disparos manuais."
+      />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
-          <h2 className="text-lg font-semibold">Grupos cadastrados</h2>
+          <h2 className="text-lg font-bold">Grupos cadastrados</h2>
           {!grupos || grupos.length === 0 ? (
-            <Card>
+            <Card className="shadow-soft-sm">
               <CardContent className="py-12 text-center text-sm text-muted-foreground">
                 Nenhum grupo cadastrado ainda. Use o formulário ao lado para
                 adicionar o primeiro (ex.: o grupo principal{" "}
@@ -46,7 +44,7 @@ export default async function GruposPage() {
           ) : (
             <div className="space-y-4">
               {grupos.map((grupo) => (
-                <Card key={grupo.id}>
+                <Card key={grupo.id} className="shadow-soft-sm">
                   <CardHeader className="flex flex-row items-center justify-between space-y-0">
                     <div>
                       <CardTitle className="text-sm">{grupo.name}</CardTitle>
@@ -92,7 +90,7 @@ export default async function GruposPage() {
         </div>
 
         <div className="space-y-4">
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardHeader>
               <CardTitle className="text-sm">Cadastrar grupo</CardTitle>
             </CardHeader>
@@ -101,7 +99,7 @@ export default async function GruposPage() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardHeader>
               <CardTitle className="text-sm">Últimos envios</CardTitle>
             </CardHeader>

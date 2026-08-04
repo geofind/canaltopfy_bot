@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { NewCampaignForm } from "@/components/app/new-campaign-form";
+import { PageHeader } from "@/components/app/page-header";
 import {
   Card,
   CardContent,
@@ -15,26 +15,21 @@ export default async function NewCampaignPage({
 }) {
   const { url } = await searchParams;
   return (
-    <div className="mx-auto max-w-lg space-y-6">
-      <div className="space-y-1">
-        <Link
-          href="/campanhas"
-          className="text-sm text-muted-foreground hover:underline"
-        >
-          ← Campanhas
-        </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Nova campanha
-        </h1>
-        <p className="eyebrow">Importação manual</p>
-      </div>
+    <div className="mx-auto max-w-lg space-y-8">
+      <PageHeader
+        eyebrow="Importação manual"
+        title="Nova campanha"
+        description="Cole a URL do produto. O pipeline executa: extração → link de afiliado → Topfy Score → cópias → revisão."
+        backHref="/campanhas"
+        backLabel="Campanhas"
+      />
 
       <Card>
         <CardHeader>
           <CardTitle>Importar produto</CardTitle>
           <CardDescription>
-            Cole a URL do produto. O pipeline executa: extração → link de
-            afiliado → Topfy Score → cópias → revisão.
+            O link de afiliado é adicionado automaticamente quando a fonte
+            suporta rastreamento.
           </CardDescription>
         </CardHeader>
         <CardContent>

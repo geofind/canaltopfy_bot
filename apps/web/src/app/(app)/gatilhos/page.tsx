@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/app/page-header";
 import { CtaPhraseForm } from "@/components/app/divulgacao-forms";
 import { deleteCtaPhrase } from "@/lib/actions";
 
@@ -16,21 +17,17 @@ export default async function GatilhosPage() {
 
   return (
     <div className="space-y-8">
-      <div className="space-y-1">
-        <p className="eyebrow">Divulgação</p>
-        <h1 className="text-2xl font-semibold tracking-tight">Gatilhos</h1>
-        <p className="text-sm text-muted-foreground">
-          Frases de chamada para ação (CTA) sorteadas pelo worker em cada
-          publicação. Sem nenhuma cadastrada, o sistema usa as 3 variações
-          padrão.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Divulgação"
+        title="Gatilhos"
+        description="Frases de chamada para ação (CTA) sorteadas pelo worker em cada publicação. Sem nenhuma cadastrada, o sistema usa as 3 variações padrão."
+      />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
-          <h2 className="text-lg font-semibold">Frases cadastradas</h2>
+          <h2 className="text-lg font-bold">Frases cadastradas</h2>
           {!frases || frases.length === 0 ? (
-            <Card>
+            <Card className="shadow-soft-sm">
               <CardContent className="py-12 text-center text-sm text-muted-foreground">
                 Nenhuma frase ainda — as publicações usam as variações padrão
                 (&quot;Ver oferta&quot;, &quot;Conferir na loja&quot;, &quot;Ver
@@ -38,7 +35,7 @@ export default async function GatilhosPage() {
               </CardContent>
             </Card>
           ) : (
-            <div className="overflow-hidden rounded-md border">
+            <div className="overflow-hidden rounded-xl border bg-white shadow-soft-sm">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
                   <tr>
@@ -77,7 +74,7 @@ export default async function GatilhosPage() {
         </div>
 
         <div className="space-y-4">
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardHeader>
               <CardTitle className="text-sm">Nova frase</CardTitle>
             </CardHeader>
@@ -85,7 +82,7 @@ export default async function GatilhosPage() {
               <CtaPhraseForm />
             </CardContent>
           </Card>
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardHeader>
               <CardTitle className="text-sm">Boas práticas</CardTitle>
             </CardHeader>

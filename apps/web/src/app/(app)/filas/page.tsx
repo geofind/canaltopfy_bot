@@ -2,6 +2,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/app/page-header";
 import { QueueForm } from "@/components/app/divulgacao-forms";
 import { QueueEditor, type QueueEditorItem } from "@/components/app/queue-editor";
 import { toggleQueue, deleteQueue } from "@/lib/actions";
@@ -134,19 +135,16 @@ export default async function FilasPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="space-y-1">
-          <p className="eyebrow">Operação</p>
-          <h1 className="text-2xl font-semibold tracking-tight">Fila de publicação</h1>
-          <p className="max-w-3xl text-sm text-muted-foreground">
-            Controle a ordem real do Telegram, o mix por marketplace e o texto
-            de cada oferta. Alterações aqui entram no próximo ciclo do worker.
-          </p>
-        </div>
-        <Badge variant="secondary">
-          {queueItems.length} oferta(s) aguardando publicação
-        </Badge>
-      </div>
+      <PageHeader
+        eyebrow="Operação"
+        title="Fila de publicação"
+        description="Controle a ordem real do Telegram, o mix por marketplace e o texto de cada oferta. Alterações aqui entram no próximo ciclo do worker."
+        right={
+          <Badge variant="secondary">
+            {queueItems.length} oferta(s) aguardando publicação
+          </Badge>
+        }
+      />
 
       {queueItems.length > 0 && (
         <section className="space-y-4">
@@ -213,12 +211,12 @@ export default async function FilasPage() {
 
       {!filas || filas.length === 0 ? (
         <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardContent className="py-16 text-center text-sm text-muted-foreground">
               Nenhuma fila ainda. Crie a primeira para começar a programação.
             </CardContent>
           </Card>
-          <Card>
+          <Card className="shadow-soft-sm">
             <CardHeader><CardTitle className="text-sm">Nova fila</CardTitle></CardHeader>
             <CardContent>
               <QueueForm grupos={(grupos ?? []).map((group) => ({
@@ -275,7 +273,7 @@ export default async function FilasPage() {
 
             return (
               <section key={fila.id} className="space-y-6">
-                <Card className="border-[#D8DCE3] bg-[#15171A] text-white">
+                <Card className="border-[#34404F] bg-[#1F2837] text-white">
                   <CardContent className="flex flex-wrap items-center justify-between gap-4 py-4">
                     <div>
                       <div className="flex items-center gap-2">
@@ -326,7 +324,7 @@ export default async function FilasPage() {
             );
           })}
 
-          <details className="rounded-2xl border bg-white p-5">
+          <details className="rounded-2xl border bg-white p-5 shadow-soft-sm">
             <summary className="cursor-pointer text-sm font-bold">Criar outra fila</summary>
             <div className="mt-5 max-w-xl">
               <QueueForm grupos={(grupos ?? []).map((group) => ({
