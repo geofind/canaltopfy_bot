@@ -823,6 +823,64 @@ class GetConnectorMercadoLivreTokenTests(unittest.TestCase):
                                     organization_id="org-1")
         buscar.assert_called_once_with("org-1")
 
+    def test_import_product_persiste_galeria_de_imagens(self):
+        """A galeria (image_urls) que o conector já devolve, mas o import
+        descartava — passa a virar coluna jsonb, pra alimentar a troca de
+        foto na fila (QueueEditor)."""
+        url = "https://produto.mercadolivre.com.br/MLB-1000000-x"
+        produto_bruto = {
+            "external_product_id": "MLB1000000", "canonical_url": url,
+            "title": "Produto X", "method": "API", "source_confidence": "VERIFIED",
+            "image_urls": '["https://img/1.jpg", "https://img/2.jpg"]',
+        }
+        with mock.patch.object(db, "get_ml_access_token", return_value=None), \
+             mock.patch.object(pipeline.MercadoLivreConnector, "get_product",
+                              return_value=produto_bruto):
+            row = pipeline.import_product("mercadolivre", url)
+        self.assertEqual(row["image_urls"], ["https://img/1.jpg", "https://img/2.jpg"])
+
+    def test_import_product_sem_galeria_nao_grava_campo(self):
+        url = "https://produto.mercadolivre.com.br/MLB-1000000-x"
+        produto_bruto = {
+            "external_product_id": "MLB1000000", "canonical_url": url,
+            "title": "Produto X", "method": "API", "source_confidence": "VERIFIED",
+        }
+        with mock.patch.object(db, "get_ml_access_token", return_value=None), \
+             mock.patch.object(pipeline.MercadoLivreConnector, "get_product",
+                              return_value=produto_bruto):
+            row = pipeline.import_product("mercadolivre", url)
+        self.assertNotIn("image_urls", row)
+
+
+class GaleriaImagensTests(unittest.TestCase):
+    """_galeria_imagens nunca inventa foto — só devolve o que o conector
+    de fato trouxe, tolerando os dois formatos possíveis (string JSON dos
+    conectores, lista já parseada de quem chamar direto)."""
+
+    def test_string_json_vira_lista(self):
+        produto = {"image_urls": '["https://a.jpg", "https://b.jpg"]'}
+        self.assertEqual(
+            pipeline._galeria_imagens(produto),
+            ["https://a.jpg", "https://b.jpg"])
+
+    def test_lista_ja_parseada_passa_direto(self):
+        produto = {"image_urls": ["https://a.jpg"]}
+        self.assertEqual(pipeline._galeria_imagens(produto), ["https://a.jpg"])
+
+    def test_json_invalido_devolve_none(self):
+        produto = {"image_urls": "{nao e json valido"}
+        self.assertIsNone(pipeline._galeria_imagens(produto))
+
+    def test_sem_campo_devolve_none(self):
+        self.assertIsNone(pipeline._galeria_imagens({}))
+
+    def test_lista_vazia_devolve_none(self):
+        self.assertIsNone(pipeline._galeria_imagens({"image_urls": "[]"}))
+
+    def test_filtra_urls_vazias_da_lista(self):
+        produto = {"image_urls": '["https://a.jpg", "", null]'}
+        self.assertEqual(pipeline._galeria_imagens(produto), ["https://a.jpg"])
+
 
 class MercadoLivreHermesFlowTests(unittest.TestCase):
     def test_valida_apenas_https_do_mercado_livre(self):
@@ -1008,6 +1066,247 @@ class CategoriaRecenteDemaisTests(unittest.TestCase):
             resultado = pipeline._categoria_recente_demais("org1", None)
         self.assertFalse(resultado)
         get_mock.assert_not_called()
+
+
+class CicloAutomaticoCategoriaFallbackTests(unittest.TestCase):
+    """Regressão: a trava de diversidade de categoria não pode zerar a
+    captura quando o candidato encontrado é sempre da mesma categoria
+    recente — mesmo princípio já aplicado em dispatch_queues (fila de
+    publicação: "preferência de diversidade nunca pode virar trava"),
+    faltando aplicar também na captura (ciclo_automatico)."""
+
+    class _FakeTable:
+        def __init__(self, rows=None, id_prefix="row"):
+            self.rows = rows or []
+            self.id_prefix = id_prefix
+            self._insert_pending = None
+            self._id_seq = 0
+            self.inserted: list[dict] = []
+
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def neq(self, *a, **k):
+            return self
+
+        def gte(self, *a, **k):
+            return self
+
+        def lte(self, *a, **k):
+            return self
+
+        def order(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def is_(self, *a, **k):
+            return self
+
+        @property
+        def not_(self):
+            return self
+
+        def maybe_single(self):
+            return self
+
+        def insert(self, fields):
+            self._insert_pending = dict(fields)
+            self.inserted.append(dict(fields))
+            return self
+
+        def update(self, fields):
+            self._insert_pending = None
+            return self
+
+        def execute(self):
+            resp = mock.MagicMock()
+            if self._insert_pending is not None:
+                self._id_seq += 1
+                row = {**self._insert_pending, "id": f"{self.id_prefix}-{self._id_seq}"}
+                resp.data = [row]
+                self._insert_pending = None
+            else:
+                resp.data = self.rows
+            return resp
+
+    def _client(self, campanhas_recentes):
+        tabelas = {
+            "products": self._FakeTable(rows=[], id_prefix="prod"),
+            "campaigns": self._FakeTable(rows=campanhas_recentes, id_prefix="camp"),
+            "contents": self._FakeTable(rows=[], id_prefix="cont"),
+        }
+        client = mock.MagicMock()
+        client.table.side_effect = lambda nome: tabelas[nome]
+        return client
+
+    def _mocks_comuns(self, candidatos, campanhas_recentes, keyword_weights=None):
+        client = self._client(campanhas_recentes)
+        capture_config = {
+            "blocklist": [], "categories": {}, "min_score": None,
+            "keyword_weights": {"magalu": keyword_weights or {}}}
+        return [
+            mock.patch.object(db, "_get", return_value=client),
+            mock.patch.object(db, "get_capture_lab_config",
+                              return_value=capture_config),
+            mock.patch.object(db, "get_active_coupons", return_value=[]),
+            mock.patch.object(db, "get_product", return_value={"id": "prod-1"}),
+            mock.patch.object(pipeline, "descobrir_produtos_magalu",
+                              return_value=candidatos),
+            mock.patch.object(pipeline, "generate_affiliate_link", return_value={
+                "affiliate_url": "https://afiliado/1",
+                "verification_status": "VERIFIED"}),
+            mock.patch.object(pipeline, "compute_score", return_value={
+                "score_total": 90, "bloqueios": []}),
+            mock.patch.object(pipeline, "generate_copies",
+                              return_value=[{"provider": "fallback", "model": None}]),
+            mock.patch.object(pipeline, "montar_copy_text", return_value="texto"),
+            mock.patch.object(pipeline, "approve_campaign"),
+            mock.patch.object(db, "register_audit"),
+        ]
+
+    def _candidato(self, titulo, categoria, url):
+        return {"title": titulo, "category": categoria, "canonical_url": url,
+                "current_price": 100.0, "original_price": 150.0,
+                "discount_percent": 30.0, "method": "API",
+                "source_confidence": "VERIFIED"}
+
+    def test_categoria_recente_ainda_aprova_quando_nao_ha_alternativa(self):
+        campanhas_recentes = [
+            {"id": "c-antiga",
+             "product": {"category": "Eletrodomesticos > Air Fryer"}},
+        ]
+        candidatos = [self._candidato(
+            "Air Fryer Nova 5L", "Eletrodomesticos > Air Fryer",
+            "https://loja/1")]
+        with mock.patch.object(pipeline, "approve_campaign") as aprovar, \
+             mock.patch.object(db, "register_audit") as audit:
+            for patcher in self._mocks_comuns(candidatos, campanhas_recentes)[:-2]:
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            resultado = pipeline.ciclo_automatico(
+                "org1", termos=["air fryer"], max_novos=1, source_name="magalu")
+        self.assertEqual(resultado["total"], 1)
+        aprovar.assert_called_once()
+        acoes = [chamada.kwargs.get("action") for chamada in audit.call_args_list]
+        self.assertIn("auto_pipeline_categoria_recente_demais", acoes)
+        self.assertIn("auto_pipeline_categoria_recente_mas_sem_alternativa", acoes)
+        self.assertIn("auto_pipeline_aprovado", acoes)
+
+    def test_categoria_diferente_disponivel_nao_usa_fallback(self):
+        """Havendo alternativa de categoria não usada recentemente, o
+        candidato repetido fica só adiado — a vaga vai pra alternativa."""
+        campanhas_recentes = [
+            {"id": "c-antiga",
+             "product": {"category": "Eletrodomesticos > Air Fryer"}},
+        ]
+        candidatos = [
+            self._candidato("Air Fryer Nova 5L", "Eletrodomesticos > Air Fryer",
+                            "https://loja/1"),
+            self._candidato("Fone Bluetooth ABC", "Audio > Fone",
+                            "https://loja/2"),
+        ]
+        with mock.patch.object(pipeline, "approve_campaign") as aprovar, \
+             mock.patch.object(db, "register_audit") as audit:
+            for patcher in self._mocks_comuns(candidatos, campanhas_recentes)[:-2]:
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            resultado = pipeline.ciclo_automatico(
+                "org1", termos=["fone"], max_novos=1, source_name="magalu")
+        self.assertEqual(resultado["total"], 1)
+        self.assertEqual(resultado["campanhas"][0]["title"], "Fone Bluetooth ABC")
+        aprovar.assert_called_once()
+        acoes = [chamada.kwargs.get("action") for chamada in audit.call_args_list]
+        self.assertNotIn(
+            "auto_pipeline_categoria_recente_mas_sem_alternativa", acoes)
+
+    def test_reaproveita_no_maximo_um_por_categoria_no_fallback(self):
+        """O resgate não pode virar uma enxurrada da mesma categoria: no
+        máximo um candidato adiado por categoria entra por ciclo."""
+        campanhas_recentes = [
+            {"id": "c-antiga",
+             "product": {"category": "Eletrodomesticos > Air Fryer"}},
+        ]
+        candidatos = [
+            self._candidato(f"Air Fryer {i}", "Eletrodomesticos > Air Fryer",
+                            f"https://loja/{i}")
+            for i in range(3)
+        ]
+        with mock.patch.object(pipeline, "approve_campaign") as aprovar, \
+             mock.patch.object(db, "register_audit"):
+            for patcher in self._mocks_comuns(candidatos, campanhas_recentes)[:-2]:
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            resultado = pipeline.ciclo_automatico(
+                "org1", termos=["air fryer"], max_novos=3, source_name="magalu")
+        self.assertEqual(resultado["total"], 1)
+        aprovar.assert_called_once()
+
+    def test_prioridade_do_termo_no_finder_decide_quem_e_avaliado_primeiro(self):
+        """Peso 3 (alta) no Finder faz o candidato daquele termo ser
+        avaliado antes do candidato de peso 1 (baixa) — com orçamento pra
+        só um, é o de peso alto que entra."""
+        baixa = self._candidato(
+            "Produto termo baixa", "Casa > Item A", "https://loja/baixa")
+        baixa["termo_busca"] = "termo baixa"
+        alta = self._candidato(
+            "Produto termo alta", "Gaming > Item B", "https://loja/alta")
+        alta["termo_busca"] = "termo alta"
+        # Ordem de descoberta propositalmente com o de peso baixo primeiro,
+        # pra provar que é o peso (e não a ordem de chegada) que decide.
+        candidatos = [baixa, alta]
+        pesos = {"termo baixa": 1, "termo alta": 3}
+        with mock.patch.object(pipeline, "approve_campaign") as aprovar, \
+             mock.patch.object(db, "register_audit"):
+            for patcher in self._mocks_comuns(
+                    candidatos, campanhas_recentes=[], keyword_weights=pesos)[:-2]:
+                patcher.start()
+                self.addCleanup(patcher.stop)
+            resultado = pipeline.ciclo_automatico(
+                "org1", termos=["termo baixa", "termo alta"], max_novos=1,
+                source_name="magalu")
+        self.assertEqual(resultado["total"], 1)
+        self.assertEqual(resultado["campanhas"][0]["title"], "Produto termo alta")
+        aprovar.assert_called_once()
+
+    def test_ciclo_automatico_persiste_galeria_de_imagens(self):
+        candidato = self._candidato(
+            "Produto com galeria", "Gaming > Item", "https://loja/1")
+        candidato["image_urls"] = '["https://img/1.jpg", "https://img/2.jpg"]'
+        tabelas = {
+            "products": self._FakeTable(rows=[], id_prefix="prod"),
+            "campaigns": self._FakeTable(rows=[], id_prefix="camp"),
+            "contents": self._FakeTable(rows=[], id_prefix="cont"),
+        }
+        client = mock.MagicMock()
+        client.table.side_effect = lambda nome: tabelas[nome]
+        with mock.patch.object(db, "_get", return_value=client), \
+             mock.patch.object(db, "get_capture_lab_config", return_value={
+                 "blocklist": [], "categories": {}, "min_score": None}), \
+             mock.patch.object(db, "get_active_coupons", return_value=[]), \
+             mock.patch.object(db, "get_product", return_value={"id": "prod-1"}), \
+             mock.patch.object(pipeline, "descobrir_produtos_magalu",
+                               return_value=[candidato]), \
+             mock.patch.object(pipeline, "generate_affiliate_link", return_value={
+                 "affiliate_url": "https://afiliado/1",
+                 "verification_status": "VERIFIED"}), \
+             mock.patch.object(pipeline, "compute_score", return_value={
+                 "score_total": 90, "bloqueios": []}), \
+             mock.patch.object(pipeline, "generate_copies",
+                               return_value=[{"provider": "fallback", "model": None}]), \
+             mock.patch.object(pipeline, "montar_copy_text", return_value="texto"), \
+             mock.patch.object(pipeline, "approve_campaign"), \
+             mock.patch.object(db, "register_audit"):
+            pipeline.ciclo_automatico(
+                "org1", termos=["x"], max_novos=1, source_name="magalu")
+        produto_inserido = tabelas["products"].inserted[0]
+        self.assertEqual(
+            produto_inserido["image_urls"],
+            ["https://img/1.jpg", "https://img/2.jpg"])
 
 
 class DescobrirProdutosAliexpressTests(unittest.TestCase):

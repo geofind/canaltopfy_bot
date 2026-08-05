@@ -823,6 +823,64 @@ export async function removeQueueItem(
   return { ok: true };
 }
 
+export async function updateQueuedProductImage(
+  productId: string,
+  imageUrl: string,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  // Nunca aceita a URL só porque o cliente mandou — só troca pra uma foto
+  // que já esteja na galeria (ou já seja a atual) do próprio produto.
+  const { data: produto } = await supabase
+    .from("products")
+    .select("image_url, image_urls")
+    .eq("id", productId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  const galeria = Array.isArray(produto?.image_urls) ? produto.image_urls : [];
+  if (!produto || (imageUrl !== produto.image_url && !galeria.includes(imageUrl))) {
+    return { error: "Essa foto não pertence à galeria deste produto." };
+  }
+
+  const { error } = await supabase
+    .from("products")
+    .update({ image_url: imageUrl })
+    .eq("id", productId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível trocar a foto." };
+
+  await supabase.from("audit_log").insert({
+    organization_id: organizationId,
+    actor_type: "user",
+    action: "produto_imagem_trocada",
+    entity_type: "product",
+    entity_id: productId,
+    metadata: { image_url: imageUrl },
+  });
+
+  revalidatePath("/filas");
+  return { ok: true };
+}
+
+export async function refreshProductImages(
+  productId: string,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  const { error } = await supabase.from("jobs").insert({
+    organization_id: organizationId,
+    type: "product.refresh_images",
+    payload: { product_id: productId },
+  });
+  if (error) return { error: "Não foi possível pedir outra foto." };
+
+  return { ok: true, info: "Buscando outra foto na loja — atualize a página em alguns segundos." };
+}
+
 export async function addToQueue(
   campaignId: string,
   contentId: string,
@@ -1415,6 +1473,29 @@ export async function toggleDiscoveryKeyword(
     .eq("id", keywordId)
     .eq("organization_id", organizationId);
   if (error) return { error: "Não foi possível atualizar a palavra-chave." };
+
+  revalidatePath("/campanhas");
+  return { ok: true };
+}
+
+export async function setDiscoveryKeywordWeight(
+  keywordId: string,
+  weight: number,
+): Promise<CampaignActionState> {
+  const supabase = await createClient();
+  const organizationId = await getOrgId(supabase);
+  if (!organizationId) return { error: "Sessão expirada — entre novamente." };
+
+  if (![1, 2, 3].includes(weight)) {
+    return { error: "Prioridade inválida." };
+  }
+
+  const { error } = await supabase
+    .from("discovery_keywords")
+    .update({ weight })
+    .eq("id", keywordId)
+    .eq("organization_id", organizationId);
+  if (error) return { error: "Não foi possível atualizar a prioridade do termo." };
 
   revalidatePath("/campanhas");
   return { ok: true };

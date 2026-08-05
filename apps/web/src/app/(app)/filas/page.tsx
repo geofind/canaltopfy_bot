@@ -11,6 +11,7 @@ import { comissaoEstimadaPorUnidade } from "@/lib/commission";
 export const dynamic = "force-dynamic";
 
 type ProductRow = {
+  id: string;
   source_name: string | null;
   category: string | null;
   score: number | null;
@@ -18,6 +19,8 @@ type ProductRow = {
   commission_pct: number | null;
   commission_brl: number | null;
   discount_pct: number | null;
+  image_url: string | null;
+  image_urls: string[] | null;
 };
 
 type CampaignRow = {
@@ -77,7 +80,7 @@ export default async function FilasPage() {
       .from("queue_items")
       .select(
         "id, queue_id, campaign_id, content_id, scheduled_at, " +
-        "campaign:campaigns(id, title, product:products(source_name, category, score, discounted_price_brl, commission_pct, commission_brl, discount_pct)), " +
+        "campaign:campaigns(id, title, product:products(id, source_name, category, score, discounted_price_brl, commission_pct, commission_brl, discount_pct, image_url, image_urls)), " +
         "content:contents(id, copy_text)",
       )
       .eq("status", "PENDING")
@@ -257,6 +260,7 @@ export default async function FilasPage() {
                   id: item.id,
                   campaignId: item.campaign_id,
                   contentId: item.content_id ?? "",
+                  productId: product?.id ?? "",
                   title: campaign?.title ?? "Campanha sem título",
                   copyText: content?.copy_text ?? "Conteúdo ainda não disponível.",
                   scheduledAt: new Date(horarioEfetivo).toISOString(),
@@ -268,6 +272,8 @@ export default async function FilasPage() {
                   commission: comissaoEstimadaPorUnidade(product),
                   discount: product?.discount_pct == null
                     ? null : Number(product.discount_pct),
+                  imageUrl: product?.image_url ?? null,
+                  imageUrls: Array.isArray(product?.image_urls) ? product.image_urls : [],
                 };
               });
 

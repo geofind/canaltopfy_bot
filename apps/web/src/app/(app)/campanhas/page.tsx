@@ -45,7 +45,11 @@ const CAPTURE_LAB_ACTIONS = [
   "auto_pipeline_bloqueado_por_palavra",
   "auto_pipeline_categoria_bloqueada",
   "auto_pipeline_categoria_recente_demais",
+  // Preferência de diversidade sem alternativa: aprovado mesmo repetindo
+  // categoria pra fila de captura não secar (pipeline.py, ciclo_automatico).
+  "auto_pipeline_categoria_recente_mas_sem_alternativa",
   "auto_pipeline_produto_similar_ja_existe",
+  "auto_pipeline_sem_copy_valida",
   "mercadolivre_oferta_descoberta",
   "mercadolivre_bloqueado_por_palavra",
   "mercadolivre_categoria_bloqueada",
@@ -54,6 +58,17 @@ const CAPTURE_LAB_ACTIONS = [
   // nunca aparecia em "Candidatos recentes".
   "campaign_aprovada",
 ];
+
+// Ações do audit_log que carregam qual termo de busca (Finder) encontrou o
+// candidato — usadas pra montar as estatísticas "encontrados/aprovados"
+// por palavra-chave. "auto_pipeline_bloqueado_por_palavra" já usa a chave
+// "termo" pra guardar a palavra bloqueada, então o termo de busca vem em
+// "termo_busca" só nesse caso (ver pipeline.py).
+function termoDoEvento(metadata: JsonRecord, action: string): string | null {
+  const chave = action === "auto_pipeline_bloqueado_por_palavra" ? "termo_busca" : "termo";
+  const valor = metadata[chave];
+  return typeof valor === "string" && valor ? valor : null;
+}
 
 const STATUS_BADGE: Record<string, string> = {
   IMPORTED: "bg-muted text-muted-foreground",
@@ -116,7 +131,7 @@ export default async function CampanhasPage({ searchParams }: CampanhasPageProps
       .order("label"),
     supabase
       .from("discovery_keywords")
-      .select("id, source_name, term, active")
+      .select("id, source_name, term, active, weight")
       .order("term"),
     supabase
       .from("discovery_blocklist")
@@ -179,7 +194,23 @@ export default async function CampanhasPage({ searchParams }: CampanhasPageProps
     sourceName: row.source_name,
     term: row.term,
     active: row.active,
+    weight: numberValue(row.weight, 2),
   }));
+
+  // Estatísticas por termo (Finder): quantos candidatos aquele termo achou
+  // nos últimos ciclos e quantos viraram campanha aprovada — cruza os
+  // mesmos eventos de audit_log já buscados para "Candidatos recentes",
+  // então não pesa mais uma query.
+  const keywordStats: Record<string, { total: number; approved: number }> = {};
+  for (const row of auditRows ?? []) {
+    const metadata = (row.metadata ?? {}) as JsonRecord;
+    const termo = termoDoEvento(metadata, row.action);
+    if (!termo) continue;
+    const atual = keywordStats[termo] ?? { total: 0, approved: 0 };
+    atual.total += 1;
+    if (row.action === "auto_pipeline_aprovado") atual.approved += 1;
+    keywordStats[termo] = atual;
+  }
 
   const captureBlocklist: CaptureLabBlockword[] = (blockRows ?? []).map((row) => ({
     id: row.id,
@@ -380,6 +411,7 @@ export default async function CampanhasPage({ searchParams }: CampanhasPageProps
         minScore={globalMinScore}
         categories={captureCategories}
         keywords={captureKeywords}
+        keywordStats={keywordStats}
         blocklist={captureBlocklist}
         suggestedCategories={suggestedCategories}
         candidates={captureCandidates}

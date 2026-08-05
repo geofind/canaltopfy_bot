@@ -24,6 +24,7 @@ import {
   setDiscoveryCategoryMinScore,
   setDiscoveryCategoryMlId,
   setDiscoveryCategoryTargetPercent,
+  setDiscoveryKeywordWeight,
   toggleDiscoveryCategory,
   toggleDiscoveryCategoryBestsellerPriority,
   toggleDiscoveryKeyword,
@@ -54,6 +55,18 @@ export type CaptureLabKeyword = {
   sourceName: string;
   term: string;
   active: boolean;
+  weight: number;
+};
+
+export type CaptureLabKeywordStats = {
+  total: number;
+  approved: number;
+};
+
+export const KEYWORD_WEIGHT_LABEL: Record<number, string> = {
+  1: "Baixa",
+  2: "Normal",
+  3: "Alta",
 };
 
 export type CaptureLabBlockword = {
@@ -83,6 +96,7 @@ type CaptureLabProps = {
   minScore: number;
   categories: CaptureLabCategory[];
   keywords: CaptureLabKeyword[];
+  keywordStats: Record<string, CaptureLabKeywordStats>;
   blocklist: CaptureLabBlockword[];
   suggestedCategories: CaptureLabCategorySuggestion[];
   candidates: CaptureLabCandidate[];
@@ -148,6 +162,7 @@ export function CaptureLab({
   minScore,
   categories: initialCategories,
   keywords: initialKeywords,
+  keywordStats,
   blocklist: initialBlocklist,
   suggestedCategories,
   candidates,
@@ -299,6 +314,22 @@ export function CaptureLab({
     startTransition(async () => {
       await removeDiscoveryKeyword(keywordId);
       router.refresh();
+    });
+  }
+
+  function setKeywordWeight(keyword: CaptureLabKeyword, weight: number) {
+    setKeywords((current) =>
+      current.map((row) => (row.id === keyword.id ? { ...row, weight } : row)));
+    startTransition(async () => {
+      const result = await setDiscoveryKeywordWeight(keyword.id, weight);
+      if (result.error) {
+        setKeywords((current) =>
+          current.map((row) => (row.id === keyword.id ? keyword : row)));
+      }
+      report(
+        result.error,
+        `Prioridade de "${keyword.term}" definida como ${KEYWORD_WEIGHT_LABEL[weight]}.`,
+      );
     });
   }
 
@@ -615,13 +646,16 @@ export function CaptureLab({
           <h2 className="mt-1 text-xl font-bold">Palavras-chave por fonte</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Termos de busca reais enviados a cada API — somam-se aos já configurados no worker,
-            nunca os substituem.
+            nunca os substituem. A prioridade decide quem é avaliado primeiro em cada ciclo de
+            captura; achados/aprovados vêm do histórico recente (Ranking).
           </p>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {SOURCES.map((source) => {
-            const items = keywords.filter((keyword) => keyword.sourceName === source.key);
+            const items = [...keywords]
+              .filter((keyword) => keyword.sourceName === source.key)
+              .sort((a, b) => b.weight - a.weight || a.term.localeCompare(b.term));
             return (
               <div
                 key={source.key}
@@ -635,36 +669,64 @@ export function CaptureLab({
                     {items.filter((item) => item.active).length}/{items.length}
                   </span>
                 </div>
-                <div className="mt-4 flex min-h-16 flex-wrap gap-1.5">
-                  {items.map((keyword) => (
-                    <span
-                      key={keyword.id}
-                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                        keyword.active
-                          ? "bg-[#F7F8FA] hover:bg-[#FFF7F8]"
-                          : "opacity-45 hover:opacity-80"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => toggleKeyword(keyword, !keyword.active)}
-                        disabled={isPending}
-                        title={keyword.active ? "Pausar termo" : "Reativar termo"}
-                        className="font-medium"
+                <div className="mt-4 max-h-72 space-y-1.5 overflow-y-auto">
+                  {items.map((keyword) => {
+                    const stats = keywordStats[keyword.term];
+                    return (
+                      <div
+                        key={keyword.id}
+                        className={`rounded-lg border px-2.5 py-1.5 transition-colors ${
+                          keyword.active ? "bg-[#F7F8FA]" : "opacity-45 hover:opacity-80"
+                        }`}
                       >
-                        {keyword.term}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => removeKeyword(keyword.id)}
-                        disabled={isPending}
-                        aria-label={`Remover ${keyword.term}`}
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="size-3" />
-                      </button>
-                    </span>
-                  ))}
+                        <div className="flex items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => toggleKeyword(keyword, !keyword.active)}
+                            disabled={isPending}
+                            title={keyword.active ? "Pausar termo" : "Reativar termo"}
+                            className="truncate text-left text-xs font-medium"
+                          >
+                            {keyword.term}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeKeyword(keyword.id)}
+                            disabled={isPending}
+                            aria-label={`Remover ${keyword.term}`}
+                            className="shrink-0 text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="size-3" />
+                          </button>
+                        </div>
+                        <div className="mt-1.5 flex items-center justify-between gap-2">
+                          <span className="text-[10px] text-muted-foreground">
+                            {stats
+                              ? `${stats.approved}/${stats.total} aprovado(s)`
+                              : "sem dados recentes"}
+                          </span>
+                          <div className="flex overflow-hidden rounded-full border">
+                            {([1, 2, 3] as const).map((weight) => (
+                              <button
+                                key={weight}
+                                type="button"
+                                onClick={() => setKeywordWeight(keyword, weight)}
+                                disabled={isPending}
+                                title={`Prioridade ${KEYWORD_WEIGHT_LABEL[weight]}`}
+                                className={`px-1.5 py-0.5 text-[9px] font-bold transition-colors ${
+                                  keyword.weight === weight
+                                    ? "bg-[#1F2837] text-white"
+                                    : "bg-white text-muted-foreground hover:bg-[#F7F8FA]"
+                                }`}
+                              >
+                                {KEYWORD_WEIGHT_LABEL[weight][0]}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                   {items.length === 0 && (
                     <span className="text-xs text-muted-foreground">Nenhum termo cadastrado.</span>
                   )}

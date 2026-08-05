@@ -21,6 +21,7 @@ Regras de segurança (spec):
 from __future__ import annotations
 
 import html.parser
+import json
 import os
 import random
 import re
@@ -69,6 +70,26 @@ def get_connector(source_name: str, organization_id: Optional[str] = None):
         token = db.get_ml_access_token(organization_id)
         return cls(access_token=token)
     return cls()
+
+
+def _galeria_imagens(produto: dict[str, Any]) -> Optional[list[str]]:
+    """Extrai a galeria de fotos extras do produto bruto do conector
+    (`image_urls`, uma string JSON — connectors/aliexpress.py e
+    mercadolivre.py) pronta pra gravar na coluna jsonb `products.
+    image_urls`. Sem galeria (Shopee/Magalu/Amazon não devolvem, ou o
+    conector não achou nenhuma extra), devolve None e o campo nem entra
+    no product_row — nunca inventa foto."""
+    bruto = produto.get("image_urls")
+    if not bruto:
+        return None
+    try:
+        lista = json.loads(bruto) if isinstance(bruto, str) else bruto
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(lista, list):
+        return None
+    limpa = [str(url) for url in lista if url]
+    return limpa or None
 
 
 def _local_stock_config(product: dict[str, Any]) -> Optional[dict[str, str]]:
@@ -163,6 +184,9 @@ def import_product(source_name: str, url: str, *,
     for origem, destino in campo_map.items():
         if destino and produto.get(origem) is not None:
             row[destino] = produto[origem]
+    galeria = _galeria_imagens(produto)
+    if galeria:
+        row["image_urls"] = galeria
 
     local_stock = _local_stock_config(produto)
     destaque = _deal_highlight_config(
@@ -239,6 +263,8 @@ def descobrir_produtos_aliexpress(termos: list[str], *,
                 break
             if not resultados:
                 break  # AliExpress acabou os resultados desse termo
+            for resultado in resultados:
+                resultado["termo_busca"] = termo
             encontrados.extend(resultados)
             coletados += len(resultados)
             if coletados >= max_por_termo * paginas:
@@ -267,7 +293,10 @@ def descobrir_produtos_shopee(termos: list[str], *,
             if not resultados:
                 break
             restantes = max_por_termo - coletados
-            encontrados.extend(resultados[:restantes])
+            selecionados = resultados[:restantes]
+            for resultado in selecionados:
+                resultado["termo_busca"] = termo
+            encontrados.extend(selecionados)
             coletados += min(len(resultados), restantes)
             if coletados >= max_por_termo:
                 break
@@ -284,6 +313,7 @@ def descobrir_produtos_magalu(termos: list[str]) -> list[dict[str, Any]]:
             url = oferta.get("canonical_url")
             if url and url not in vistos:
                 vistos.add(url)
+                oferta["termo_busca"] = termo
                 encontrados.append(oferta)
     return encontrados
 
@@ -375,6 +405,11 @@ def _existe_produto_similar_recente(organization_id: str, titulo: str, *,
 
 CATEGORIA_JANELA_MINIMA = 10
 
+# Escala de prioridade do termo no Finder (/campanhas): 1=baixa, 2=normal
+# (default da coluna — migração 0023), 3=alta. Termos vindos só da env var
+# do worker (sem linha em discovery_keywords) usam sempre o valor "normal".
+PESO_TERMO_PADRAO = 2
+
 
 def _categoria_recente_demais(organization_id: str, categoria: Optional[str], *,
                               janela: int = CATEGORIA_JANELA_MINIMA) -> bool:
@@ -445,63 +480,22 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
     # reagrupar TVs e fones antes da trava de diversidade da fila.
     candidatos = (candidatos_sem_duplicata if source_name == "magalu" else
                   sort_by_editorial_affinity(candidatos_sem_duplicata))
-    for produto_bruto in candidatos:
-        if len(criados) >= max_novos:
-            break
-        desconto = produto_bruto.get("discount_percent")
-        if (min_discount_pct is not None and
-                (desconto is None or float(desconto) < min_discount_pct)):
-            continue
-        source_url = produto_bruto.get("canonical_url")
-        if not source_url:
-            continue
+    # Prioridade do Finder (/campanhas): termo de peso maior é avaliado
+    # antes dos demais — sort estável, então quem tem o mesmo peso (a
+    # maioria, termo sem linha no banco = "normal") mantém a ordem que já
+    # tinha pela afinidade editorial/catálogo acima.
+    pesos_termo = capture_config.get("keyword_weights", {}).get(source_name, {})
+    if pesos_termo:
+        candidatos.sort(
+            key=lambda c: -pesos_termo.get(c.get("termo_busca"), PESO_TERMO_PADRAO))
 
-        ja_existe = (db._get().table("products").select("id")
-                     .eq("organization_id", organization_id)
-                     .eq("source_url", source_url).limit(1).execute().data)
-        if ja_existe:
-            continue
-
-        titulo_bruto = produto_bruto.get("title") or ""
-        termo_bloqueado = is_blocked_by_word(
-            titulo_bruto, produto_bruto.get("category"), capture_config["blocklist"])
-        if termo_bloqueado:
-            db.register_audit(
-                organization_id, actor_type="worker",
-                action="auto_pipeline_bloqueado_por_palavra",
-                entity_type="product", entity_id=source_url,
-                metadata={"title": titulo_bruto, "termo": termo_bloqueado})
-            continue
-
-        if _existe_produto_similar_recente(
-                organization_id, titulo_bruto, source_name=source_name):
-            db.register_audit(
-                organization_id, actor_type="worker",
-                action="auto_pipeline_produto_similar_ja_existe",
-                entity_type="product", entity_id=source_url,
-                metadata={"title": titulo_bruto})
-            continue
-
-        categoria_bruta = produto_bruto.get("category")
-        familia = category_family(categoria_bruta, titulo_bruto)
-        config_categoria = capture_config["categories"].get(familia) if familia else None
-        motivo_categoria = category_lock_reason(config_categoria)
-        if motivo_categoria:
-            db.register_audit(
-                organization_id, actor_type="worker",
-                action="auto_pipeline_categoria_bloqueada",
-                entity_type="product", entity_id=source_url,
-                metadata={"title": titulo_bruto, "category": categoria_bruta,
-                          "family": familia, "motivo": motivo_categoria})
-            continue
-        if _categoria_recente_demais(organization_id, categoria_bruta):
-            db.register_audit(
-                organization_id, actor_type="worker",
-                action="auto_pipeline_categoria_recente_demais",
-                entity_type="product", entity_id=source_url,
-                metadata={"title": titulo_bruto, "category": categoria_bruta})
-            continue
-
+    def _tentar_aprovar(produto_bruto: dict[str, Any], source_url: str,
+                        titulo_bruto: str, categoria_bruta: Optional[str],
+                        config_categoria: Optional[dict[str, Any]]) -> bool:
+        """Importa, pontua, gera copy e aprova um candidato que já passou
+        por todas as travas de qualidade/curadoria. Devolve False (sem
+        criar nada) quando o score não bate o corte ou a copy não valida —
+        quem chama decide se tenta o próximo candidato."""
         product_row: dict[str, Any] = {
             "organization_id": organization_id,
             "source_name": source_name,
@@ -514,6 +508,9 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
         for origem, destino in IMPORT_FIELD_MAP.items():
             if produto_bruto.get(origem) is not None:
                 product_row[destino] = produto_bruto[origem]
+        galeria = _galeria_imagens(produto_bruto)
+        if galeria:
+            product_row["image_urls"] = galeria
         local_stock = _local_stock_config(produto_bruto)
         destaque = _deal_highlight_config(
             produto_bruto,
@@ -531,7 +528,7 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
         if card_config:
             product_row["card_config"] = card_config
         if not product_row.get("title"):
-            continue
+            return False
 
         # Opt-in (IMAGE_QUALITY_CHECK_ENABLED): tenta achar, entre as
         # fotos da galeria, uma sem texto/marca sobreposta — sem isso
@@ -586,8 +583,9 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
                 entity_id=str(product_id),
                 metadata={"title": titulo_bruto, "category": categoria_bruta,
                           "bloqueios": score["bloqueios"],
-                          "score": score["score_total"], "corte": corte_efetivo})
-            continue
+                          "score": score["score_total"], "corte": corte_efetivo,
+                          "termo": produto_bruto.get("termo_busca")})
+            return False
 
         cupons = db.get_active_coupons(organization_id, source_name)
         if cupons:
@@ -599,8 +597,9 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
             db.register_audit(
                 organization_id, actor_type="worker",
                 action="auto_pipeline_sem_copy_valida",
-                entity_type="campaign", entity_id=str(campaign_id))
-            continue
+                entity_type="campaign", entity_id=str(campaign_id),
+                metadata={"termo": produto_bruto.get("termo_busca")})
+            return False
         melhor = validas[0]
 
         content_resp = db._get().table("contents").insert({
@@ -630,10 +629,111 @@ def ciclo_automatico(organization_id: str, *, termos: list[str],
             action="auto_pipeline_aprovado", entity_type="campaign",
             entity_id=str(campaign_id),
             metadata={"title": product_row.get("title"), "category": categoria_bruta,
-                      "score": score["score_total"], "queue_id": queue_id})
+                      "score": score["score_total"], "queue_id": queue_id,
+                      "termo": produto_bruto.get("termo_busca")})
         criados.append({"campaign_id": campaign_id, "product_id": product_id,
                         "title": product_row.get("title"),
                         "score": score["score_total"]})
+        return True
+
+    # Candidatos só travados pela diversidade de categoria (todas as outras
+    # checagens passaram) — guardados pra tentativa de reaproveitamento no
+    # final, se sobrar orçamento sem alternativa melhor.
+    adiados_por_categoria: list[dict[str, Any]] = []
+
+    for produto_bruto in candidatos:
+        if len(criados) >= max_novos:
+            break
+        desconto = produto_bruto.get("discount_percent")
+        if (min_discount_pct is not None and
+                (desconto is None or float(desconto) < min_discount_pct)):
+            continue
+        source_url = produto_bruto.get("canonical_url")
+        if not source_url:
+            continue
+
+        ja_existe = (db._get().table("products").select("id")
+                     .eq("organization_id", organization_id)
+                     .eq("source_url", source_url).limit(1).execute().data)
+        if ja_existe:
+            continue
+
+        titulo_bruto = produto_bruto.get("title") or ""
+        termo_bloqueado = is_blocked_by_word(
+            titulo_bruto, produto_bruto.get("category"), capture_config["blocklist"])
+        if termo_bloqueado:
+            db.register_audit(
+                organization_id, actor_type="worker",
+                action="auto_pipeline_bloqueado_por_palavra",
+                entity_type="product", entity_id=source_url,
+                metadata={"title": titulo_bruto, "termo": termo_bloqueado,
+                          "termo_busca": produto_bruto.get("termo_busca")})
+            continue
+
+        if _existe_produto_similar_recente(
+                organization_id, titulo_bruto, source_name=source_name):
+            db.register_audit(
+                organization_id, actor_type="worker",
+                action="auto_pipeline_produto_similar_ja_existe",
+                entity_type="product", entity_id=source_url,
+                metadata={"title": titulo_bruto,
+                          "termo": produto_bruto.get("termo_busca")})
+            continue
+
+        categoria_bruta = produto_bruto.get("category")
+        familia = category_family(categoria_bruta, titulo_bruto)
+        config_categoria = capture_config["categories"].get(familia) if familia else None
+        motivo_categoria = category_lock_reason(config_categoria)
+        if motivo_categoria:
+            db.register_audit(
+                organization_id, actor_type="worker",
+                action="auto_pipeline_categoria_bloqueada",
+                entity_type="product", entity_id=source_url,
+                metadata={"title": titulo_bruto, "category": categoria_bruta,
+                          "family": familia, "motivo": motivo_categoria,
+                          "termo": produto_bruto.get("termo_busca")})
+            continue
+        if _categoria_recente_demais(organization_id, categoria_bruta):
+            db.register_audit(
+                organization_id, actor_type="worker",
+                action="auto_pipeline_categoria_recente_demais",
+                entity_type="product", entity_id=source_url,
+                metadata={"title": titulo_bruto, "category": categoria_bruta,
+                          "termo": produto_bruto.get("termo_busca")})
+            adiados_por_categoria.append({
+                "produto_bruto": produto_bruto, "source_url": source_url,
+                "titulo_bruto": titulo_bruto, "categoria_bruta": categoria_bruta,
+                "config_categoria": config_categoria})
+            continue
+
+        _tentar_aprovar(produto_bruto, source_url, titulo_bruto,
+                        categoria_bruta, config_categoria)
+
+    # Preferência de diversidade nunca pode virar trava total (mesmo
+    # princípio já aplicado em dispatch_queues): se sobrou orçamento e só
+    # havia candidatos de categoria usada recentemente, aprova o melhor de
+    # cada categoria adiada em vez de devolver o ciclo vazio — repetir uma
+    # categoria é melhor que a fila de captura secar por completo.
+    categorias_reaproveitadas: set[str] = set()
+    for adiado in adiados_por_categoria:
+        if len(criados) >= max_novos:
+            break
+        categoria_bruta = adiado["categoria_bruta"]
+        if categoria_bruta and categoria_bruta in categorias_reaproveitadas:
+            continue
+        aprovado = _tentar_aprovar(
+            adiado["produto_bruto"], adiado["source_url"], adiado["titulo_bruto"],
+            categoria_bruta, adiado["config_categoria"])
+        if aprovado:
+            if categoria_bruta:
+                categorias_reaproveitadas.add(categoria_bruta)
+            db.register_audit(
+                organization_id, actor_type="worker",
+                action="auto_pipeline_categoria_recente_mas_sem_alternativa",
+                entity_type="product", entity_id=adiado["source_url"],
+                metadata={"title": adiado["titulo_bruto"], "category": categoria_bruta,
+                          "termo": adiado["produto_bruto"].get("termo_busca")})
+
     return {"total": len(criados), "campanhas": criados,
             "source_name": source_name}
 

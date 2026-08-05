@@ -645,6 +645,34 @@ def process_job(job: dict[str, Any]) -> None:
                           entity_type="queue", entity_id=str(queue_id),
                           metadata=resultado)
 
+    elif tipo == "product.refresh_images":
+        # Botão "trocar foto" na fila (/filas) quando a galeria do produto
+        # está vazia (Shopee/Magalu/Amazon nunca têm, ou o produto foi
+        # importado antes da galeria existir) — busca de novo pela API
+        # oficial na tentativa de achar outra foto; best-effort, nunca
+        # inventa imagem. products.image_url (usado no post real) só muda
+        # se a busca de fato trouxer uma foto.
+        product_id = payload.get("product_id")
+        if not product_id:
+            raise ValueError("job product.refresh_images sem product_id")
+        produto_atual = db.get_product(str(product_id))
+        if not produto_atual:
+            raise ValueError(f"produto {product_id} não encontrado")
+        fresh = import_product(
+            produto_atual["source_name"], produto_atual["source_url"],
+            organization_id=org)
+        atualizacoes: dict[str, Any] = {}
+        if fresh.get("image_url"):
+            atualizacoes["image_url"] = fresh["image_url"]
+        if fresh.get("image_urls"):
+            atualizacoes["image_urls"] = fresh["image_urls"]
+        if atualizacoes:
+            db._get().table("products").update(atualizacoes).eq("id", product_id).execute()
+        db.register_audit(org, actor_type="user",
+                          action="produto_imagens_atualizadas",
+                          entity_type="product", entity_id=str(product_id),
+                          metadata={"encontrou_novas": bool(atualizacoes)})
+
     elif tipo == "cache.cleanup":
         # Ação manual (botão em /sistema) — nunca chamada por um
         # agendador; hoje o cache local costuma estar vazio (nada grava

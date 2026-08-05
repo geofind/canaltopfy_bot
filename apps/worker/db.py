@@ -219,6 +219,7 @@ def get_capture_lab_config(organization_id: str) -> dict[str, Any]:
         "min_score": None,
         "categories": {},
         "keywords_by_source": {},
+        "keyword_weights": {},
         "blocklist": [],
     }
     try:
@@ -239,13 +240,21 @@ def get_capture_lab_config(organization_id: str) -> dict[str, Any]:
     except Exception:
         pass
     try:
-        termos = (_get().table("discovery_keywords").select("source_name, term")
+        termos = (_get().table("discovery_keywords")
+                  .select("source_name, term, weight")
                   .eq("organization_id", organization_id)
                   .eq("active", True).execute().data or [])
         por_fonte: dict[str, list[str]] = {}
+        pesos_por_fonte: dict[str, dict[str, int]] = {}
         for linha in termos:
             por_fonte.setdefault(linha["source_name"], []).append(linha["term"])
+            peso = linha.get("weight")
+            # 2 = "normal" na escala de 3 níveis (1 baixa, 2 normal, 3 alta)
+            # do Finder — mesmo default da coluna no banco (migração 0023).
+            pesos_por_fonte.setdefault(linha["source_name"], {})[linha["term"]] = (
+                int(peso) if peso is not None else 2)
         config["keywords_by_source"] = por_fonte
+        config["keyword_weights"] = pesos_por_fonte
     except Exception:
         pass
     try:

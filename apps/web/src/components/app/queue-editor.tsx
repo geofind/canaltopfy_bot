@@ -6,8 +6,12 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   GripVertical,
+  ImageOff,
+  Images,
   Pencil,
   RefreshCcw,
   Save,
@@ -17,10 +21,12 @@ import {
 } from "lucide-react";
 import {
   forceQueueMixAlignment,
+  refreshProductImages,
   removeQueueItem,
   reorderQueueItems,
   setQueueManualOrder,
   updateQueuedCampaignText,
+  updateQueuedProductImage,
   updateQueueSourceMix,
 } from "@/lib/actions";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +38,7 @@ export type QueueEditorItem = {
   id: string;
   campaignId: string;
   contentId: string;
+  productId: string;
   title: string;
   copyText: string;
   scheduledAt: string;
@@ -41,7 +48,11 @@ export type QueueEditorItem = {
   price: number | null;
   commission: number | null;
   discount: number | null;
+  imageUrl: string | null;
+  imageUrls: string[];
 };
+
+const PAGE_SIZE = 10;
 
 type QueueEditorProps = {
   queue: {
@@ -97,6 +108,10 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
     magalu: queue.magaluTargetPercent,
   });
   const [manualOrderLocked, setManualOrderLocked] = useState(queue.manualOrderLocked);
+  // Só a exibição pagina — a lista completa (items) continua sendo a
+  // fonte de verdade pro mix e pra reordenação, senão mover um item pra
+  // outra página perderia a posição real na fila.
+  const [page, setPage] = useState(1);
 
   const mixTotal = mix.shopee + mix.aliexpress + mix.mercadolivre + mix.magalu;
   const actualMix = useMemo(() => {
@@ -210,6 +225,38 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
     });
   }
 
+  function cycleImage(item: QueueEditorItem) {
+    if (!item.productId || isPending) return;
+    const galeria = item.imageUrls.length > 0 ? item.imageUrls : (item.imageUrl ? [item.imageUrl] : []);
+    if (galeria.length < 2) {
+      setMessage("Buscando outra foto…");
+      startTransition(async () => {
+        const result = await refreshProductImages(item.productId);
+        setMessage(result.error ?? result.info ?? "Pedido enviado.");
+      });
+      return;
+    }
+    const atualIndex = Math.max(0, galeria.indexOf(item.imageUrl ?? ""));
+    const proxima = galeria[(atualIndex + 1) % galeria.length];
+    const anterior = item.imageUrl;
+    setItems((current) => current.map((row) =>
+      row.id === item.id ? { ...row, imageUrl: proxima } : row));
+    startTransition(async () => {
+      const result = await updateQueuedProductImage(item.productId, proxima);
+      if (result.error) {
+        setItems((current) => current.map((row) =>
+          row.id === item.id ? { ...row, imageUrl: anterior } : row));
+        setMessage(result.error);
+        return;
+      }
+      setMessage("Foto trocada — vale até a publicação real.");
+    });
+  }
+
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageItems = items.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
   return (
     <div className="space-y-6">
       <section className="overflow-hidden rounded-2xl border bg-white shadow-soft-sm">
@@ -314,7 +361,8 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
         )}
 
         <div className="relative space-y-3 before:absolute before:bottom-6 before:left-[2.15rem] before:top-6 before:w-px before:bg-[#D8DCE3]">
-          {items.map((item, index) => {
+          {pageItems.map((item) => {
+            const index = items.findIndex((row) => row.id === item.id);
             const source = SOURCE[item.sourceName] ?? {
               label: item.sourceName || "Marketplace",
               color: "bg-slate-400",
@@ -330,7 +378,7 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
                 onDragEnd={() => setDraggedId(null)}
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={() => dropBefore(item.id)}
-                className={`relative grid grid-cols-[4.3rem_1fr] gap-3 rounded-2xl border bg-white p-3 shadow-soft-sm transition ${
+                className={`relative grid grid-cols-[4.3rem_3.5rem_1fr] gap-3 rounded-2xl border bg-white p-3 shadow-soft-sm transition ${
                   draggedId === item.id ? "scale-[.99] border-primary opacity-60" : "hover:border-[#AAB0BA]"
                 }`}
               >
@@ -339,6 +387,35 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
                     {index + 1}º
                   </span>
                   <GripVertical className="size-5 cursor-grab text-muted-foreground active:cursor-grabbing" />
+                </div>
+
+                <div className="flex flex-col items-center gap-1.5">
+                  <div className="flex size-14 items-center justify-center overflow-hidden rounded-lg border bg-[#F7F8FA]">
+                    {item.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={item.imageUrl}
+                        alt={item.title}
+                        className="h-full w-full object-contain"
+                      />
+                    ) : (
+                      <ImageOff className="size-5 text-muted-foreground" aria-hidden="true" />
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isPending}
+                    onClick={() => cycleImage(item)}
+                    title={
+                      item.imageUrls.length > 1
+                        ? "Trocar para a próxima foto da galeria"
+                        : "Buscar outra foto na loja"
+                    }
+                    aria-label="Trocar foto do produto"
+                    className="text-muted-foreground hover:text-primary disabled:opacity-40"
+                  >
+                    <Images className="size-4" />
+                  </button>
                 </div>
 
                 <div className="min-w-0">
@@ -457,6 +534,38 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
             );
           })}
         </div>
+
+        {totalPages > 1 && (
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              Mostrando {(safePage - 1) * PAGE_SIZE + 1}–
+              {Math.min(safePage * PAGE_SIZE, items.length)} de {items.length}
+            </p>
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={safePage <= 1}
+                onClick={() => setPage(safePage - 1)}
+              >
+                <ChevronLeft className="size-4" /> Anterior
+              </Button>
+              <span className="px-2 text-xs font-bold text-muted-foreground">
+                Página {safePage} de {totalPages}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={safePage >= totalPages}
+                onClick={() => setPage(safePage + 1)}
+              >
+                Próxima <ChevronRight className="size-4" />
+              </Button>
+            </div>
+          </div>
+        )}
 
         {items.length === 0 && (
           <div className="rounded-2xl border border-dashed bg-white px-6 py-14 text-center text-sm text-muted-foreground">
