@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Magalu">
+  <rect width="24" height="24" rx="6" fill="#0086FF"/>
+  <path d="M8.2 10.5c0-2.4 1.7-4 3.8-4s3.8 1.6 3.8 4" stroke="#FFFFFF" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <path d="M6.6 10.2h10.8l-1 8.1a1.6 1.6 0 0 1-1.6 1.4H9.2a1.6 1.6 0 0 1-1.6-1.4z" fill="#FFFFFF"/>
+  <text x="12" y="15.6" text-anchor="middle" dominant-baseline="middle"
+        font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="6.5" fill="#0086FF">Lu</text>
+</svg>

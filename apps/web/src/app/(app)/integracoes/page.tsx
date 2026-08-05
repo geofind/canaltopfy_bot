@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/app/page-header";
+import { MarketplaceLogo } from "@/components/app/marketplace-logo";
 
 export const dynamic = "force-dynamic";
 
@@ -139,7 +140,10 @@ export default async function IntegracoesPage() {
 
       <Card className="shadow-soft-sm">
         <CardHeader>
-          <CardTitle>Mercado Livre</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <MarketplaceLogo source="mercadolivre" size={20} />
+            Mercado Livre
+          </CardTitle>
           <CardDescription>
             Importação manual de produtos com seu código de afiliado.
             Automação de importação é proibida pela plataforma — o conector
@@ -187,7 +191,10 @@ export default async function IntegracoesPage() {
 
       <Card className="shadow-soft-sm">
         <CardHeader>
-          <CardTitle>AliExpress</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <MarketplaceLogo source="aliexpress" size={20} />
+            AliExpress
+          </CardTitle>
           <CardDescription>
             Captura automática pela Affiliate API oficial, com geração de link
             rastreado, termos embaralhados, score e deduplicação antes de entrar
@@ -250,7 +257,10 @@ export default async function IntegracoesPage() {
 
       <Card className="shadow-soft-sm">
         <CardHeader>
-          <CardTitle>Shopee</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <MarketplaceLogo source="shopee" size={20} />
+            Shopee
+          </CardTitle>
           <CardDescription>
             Integrada ao mesmo fluxo de score, deduplicação, diversidade,
             copy, fila e Telegram. Catálogo e shortlinks vêm da Affiliate
@@ -301,7 +311,10 @@ export default async function IntegracoesPage() {
 
       <Card className="shadow-soft-sm">
         <CardHeader>
-          <CardTitle>Magalu</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <MarketplaceLogo source="magalu" size={20} />
+            Magalu
+          </CardTitle>
           <CardDescription>
             Integração pelo Influenciador Magalu / Magazine Você. A atribuição
             de afiliado é feita pela vitrine oficial; as APIs OAuth do Magalu

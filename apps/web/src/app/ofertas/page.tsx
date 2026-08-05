@@ -9,6 +9,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { MarketplaceLogo, marketplaceLabel } from "@/components/app/marketplace-logo";
 
 export const dynamic = "force-dynamic";
 
@@ -21,14 +22,6 @@ export const metadata: Metadata = {
 // Destino dos CTAs de Telegram: o GRUPO de ofertas (onde os posts saem),
 // não o bot (que só publica/administra o grupo, não é feito pra DM).
 const TELEGRAM_GROUP_URL = process.env.TELEGRAM_GROUP_URL || "https://t.me/topfy_tech";
-
-const LOJA_LABEL: Record<string, string> = {
-  aliexpress: "AliExpress",
-  amazon: "Amazon",
-  mercadolivre: "Mercado Livre",
-  mercadolibre: "Mercado Livre",
-  shopee: "Shopee",
-};
 
 const CARD_TONES = [
   "bg-[#FBE9EC]",
@@ -80,10 +73,6 @@ type Oferta = {
   status: string;
   product: ProdutoOferta | null;
 };
-
-function nomeDaLoja(sourceName: string | null | undefined) {
-  return sourceName ? LOJA_LABEL[sourceName] ?? sourceName : "Loja parceira";
-}
 
 function nomeDaCategoria(category: string | null | undefined) {
   return category?.trim() || "Achadinhos";
@@ -171,7 +160,10 @@ function OfertaCard({
 
       <div className="flex flex-1 flex-col px-3 pb-3 pt-4">
         <div className="flex items-center justify-between gap-3 font-mono text-[9px] font-bold uppercase tracking-[1.4px] text-muted-foreground">
-          <span>{nomeDaLoja(produto?.source_name)}</span>
+          <span className="inline-flex items-center gap-1">
+            <MarketplaceLogo source={produto?.source_name} size={14} />
+            {marketplaceLabel(produto?.source_name)}
+          </span>
           <span className="truncate text-right">
             {nomeDaCategoria(produto?.category)}
           </span>
@@ -433,9 +425,10 @@ export default async function OfertasPage() {
                       )}
                     </div>
                     <div>
-                      <p className="font-mono text-[9px] font-bold uppercase tracking-[1.8px] text-primary">
-                        Destaque mais recente ·{" "}
-                        {nomeDaLoja(produtoDestaque?.source_name)}
+                      <p className="flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[1.8px] text-primary">
+                        Destaque mais recente ·
+                        <MarketplaceLogo source={produtoDestaque?.source_name} size={14} />
+                        {marketplaceLabel(produtoDestaque?.source_name)}
                       </p>
                       <h2 className="mt-3 font-display text-3xl font-bold leading-tight tracking-tight sm:text-4xl">
                         {tituloDestaque}

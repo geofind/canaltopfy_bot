@@ -4,16 +4,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CheckCircle2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { MarketplaceLogo, marketplaceLabel } from "@/components/app/marketplace-logo";
 
 export const dynamic = "force-dynamic";
-
-const LOJA_LABEL: Record<string, string> = {
-  aliexpress: "AliExpress",
-  amazon: "Amazon",
-  mercadolivre: "Mercado Livre",
-  mercadolibre: "Mercado Livre",
-  shopee: "Shopee",
-};
 
 const brl = new Intl.NumberFormat("pt-BR", {
   style: "currency",
@@ -134,9 +127,7 @@ export default async function ShowcasePage({
     ? (conteudoAprovado as unknown as { copy_text: string })
     : null;
   const ctaUrl = publicacao ? `/r/${publicacao.id}` : null;
-  const loja = produto?.source_name
-    ? LOJA_LABEL[produto.source_name] ?? produto.source_name
-    : null;
+  const loja = produto?.source_name ? marketplaceLabel(produto.source_name) : null;
   const preco = produto?.discounted_price_brl;
   const original = produto?.original_price_brl;
   const desconto =
@@ -233,7 +224,8 @@ export default async function ShowcasePage({
 
           <section className="mx-auto w-full max-w-lg lg:pt-4">
             {loja && (
-              <span className="inline-flex rounded-full border border-border bg-card px-3 py-1 text-xs font-bold uppercase tracking-[2px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-bold uppercase tracking-[2px] text-muted-foreground">
+                <MarketplaceLogo source={produto?.source_name} size={14} />
                 {loja}
               </span>
             )}
@@ -324,7 +316,7 @@ export default async function ShowcasePage({
                 } | null;
                 const outroPreco = outroProduto?.discounted_price_brl;
                 const outraLoja = outroProduto?.source_name
-                  ? LOJA_LABEL[outroProduto.source_name] ?? outroProduto.source_name
+                  ? marketplaceLabel(outroProduto.source_name)
                   : null;
                 return (
                   <Link
@@ -349,7 +341,8 @@ export default async function ShowcasePage({
                       )}
                     </div>
                     <div className="flex flex-1 flex-col p-4">
-                      <p className="text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">
+                      <p className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-[2px] text-muted-foreground">
+                        <MarketplaceLogo source={outroProduto?.source_name} size={12} />
                         {outraLoja ?? "Loja"}
                       </p>
                       <h3 className="mt-1 line-clamp-2 text-sm font-semibold text-foreground">

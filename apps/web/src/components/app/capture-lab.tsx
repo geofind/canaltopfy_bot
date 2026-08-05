@@ -36,6 +36,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { MarketplaceLogo } from "@/components/app/marketplace-logo";
 
 export type CaptureLabCategory = {
   id: string;
@@ -662,7 +663,8 @@ export function CaptureLab({
                 className="rounded-2xl border bg-white p-5 shadow-soft-sm transition-colors hover:border-primary/25"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-xs font-black uppercase tracking-[.14em] text-muted-foreground">
+                  <h3 className="flex items-center gap-1.5 text-xs font-black uppercase tracking-[.14em] text-muted-foreground">
+                    <MarketplaceLogo source={source.key} size={16} />
                     {source.label}
                   </h3>
                   <span className="rounded-full bg-[#F7F8FA] px-2 py-0.5 font-mono text-[10px] font-bold text-muted-foreground">

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { MarketplaceLogo, marketplaceLabel } from "@/components/app/marketplace-logo";
 import {
   ApproveContentButton,
   SchedulePublicationForm,
@@ -194,10 +195,11 @@ export default async function CampaignDetailPage({
                   <dd>{Number(produto.sales_count).toLocaleString("pt-BR")}</dd>
                 </div>
               )}
-              <div className="flex justify-between gap-4">
+              <div className="flex items-center justify-between gap-4">
                 <dt className="text-muted-foreground">Fonte</dt>
-                <dd>
-                  {produto?.source_name} · {produto?.method} ·{" "}
+                <dd className="inline-flex items-center gap-1.5">
+                  <MarketplaceLogo source={produto?.source_name} size={14} />
+                  {marketplaceLabel(produto?.source_name)} · {produto?.method} ·{" "}
                   {produto?.confidence}
                 </dd>
               </div>

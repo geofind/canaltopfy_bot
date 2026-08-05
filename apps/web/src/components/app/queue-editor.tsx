@@ -33,6 +33,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { MarketplaceLogo, marketplaceLabel } from "@/components/app/marketplace-logo";
 
 export type QueueEditorItem = {
   id: string;
@@ -66,13 +67,6 @@ type QueueEditorProps = {
     manualOrderLocked: boolean;
   };
   initialItems: QueueEditorItem[];
-};
-
-const SOURCE: Record<string, { label: string; color: string; dot: string }> = {
-  shopee: { label: "Shopee", color: "bg-[#EE4D2D]", dot: "bg-[#EE4D2D]" },
-  aliexpress: { label: "AliExpress", color: "bg-[#E52B37]", dot: "bg-[#E52B37]" },
-  mercadolivre: { label: "Mercado Livre", color: "bg-[#FFE600]", dot: "bg-[#FFE600]" },
-  magalu: { label: "Magalu", color: "bg-[#0086FF]", dot: "bg-[#0086FF]" },
 };
 
 function formatMoney(value: number | null) {
@@ -278,14 +272,14 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
         <form action={saveMix} className="space-y-5 p-5">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {([
-              ["shopee", "Shopee", "#EE4D2D"],
-              ["aliexpress", "AliExpress", "#E52B37"],
-              ["mercadolivre", "Mercado Livre", "#D8BF00"],
-              ["magalu", "Magalu", "#0086FF"],
-            ] as const).map(([key, label, color]) => (
+              ["shopee", "Shopee"],
+              ["aliexpress", "AliExpress"],
+              ["mercadolivre", "Mercado Livre"],
+              ["magalu", "Magalu"],
+            ] as const).map(([key, label]) => (
               <label key={key} className="rounded-xl border bg-[#FBFBFC] p-3">
                 <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-[.12em]">
-                  <span className="size-2.5 rounded-full" style={{ backgroundColor: color }} />
+                  <MarketplaceLogo source={key} size={18} />
                   {label}
                 </span>
                 <span className="mt-3 flex items-center gap-2">
@@ -363,11 +357,6 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
         <div className="relative space-y-3 before:absolute before:bottom-6 before:left-[2.15rem] before:top-6 before:w-px before:bg-[#D8DCE3]">
           {pageItems.map((item) => {
             const index = items.findIndex((row) => row.id === item.id);
-            const source = SOURCE[item.sourceName] ?? {
-              label: item.sourceName || "Marketplace",
-              color: "bg-slate-400",
-              dot: "bg-slate-400",
-            };
             const editing = editingId === item.id;
             const confirming = confirmingId === item.id;
             return (
@@ -422,8 +411,10 @@ export function QueueEditor({ queue, initialItems }: QueueEditorProps) {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className={`size-2.5 rounded-full ${source.dot}`} />
-                        <span className="text-xs font-bold uppercase tracking-[.1em]">{source.label}</span>
+                        <MarketplaceLogo source={item.sourceName} size={16} />
+                        <span className="text-xs font-bold uppercase tracking-[.1em]">
+                          {marketplaceLabel(item.sourceName)}
+                        </span>
                         {item.score != null && <Badge variant="secondary">Score {Math.round(item.score)}</Badge>}
                         {item.discount != null && item.discount > 0 && (
                           <Badge variant="outline">-{Math.round(item.discount)}%</Badge>

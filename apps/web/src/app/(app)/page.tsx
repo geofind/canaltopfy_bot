@@ -11,6 +11,7 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { LiveCampaignFlow } from "@/components/app/live-campaign-flow";
 import { PublicationCountdown } from "@/components/app/publication-countdown";
+import { MarketplaceLogo, marketplaceLabel } from "@/components/app/marketplace-logo";
 import { comissaoEstimadaPorUnidade } from "@/lib/commission";
 
 export const dynamic = "force-dynamic";
@@ -87,12 +88,6 @@ function formatFreshness(value: string | null | undefined) {
   if (minutes < 1) return "agora";
   if (minutes < 60) return `há ${minutes} min`;
   return `há ${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}`;
-}
-
-function sourceLabel(source: string | null | undefined) {
-  if (source === "mercadolivre") return "Mercado Livre";
-  if (source === "shopee") return "Shopee";
-  return "AliExpress";
 }
 
 export default async function DashboardPage() {
@@ -207,7 +202,7 @@ export default async function DashboardPage() {
       ? {
           id: nextCampaign.id,
           title: nextProduct.title,
-          source: sourceLabel(nextProduct.source_name),
+          source: marketplaceLabel(nextProduct.source_name),
           scheduledTime: formatTime(nextQueueItem.scheduled_at),
           isDue: new Date(nextQueueItem.scheduled_at).getTime() <= agora,
           priceLabel: formatMoney(nextProduct.discounted_price_brl),
@@ -368,8 +363,9 @@ export default async function DashboardPage() {
                   <p className="truncate text-sm font-bold group-hover:text-primary">
                     {product.title}
                   </p>
-                  <p className="mt-1 text-[10px] text-muted-foreground">
-                    {sourceLabel(product.source_name)} · score {Math.round(numberValue(product.score))} · {formatMoney(product.discounted_price_brl)}
+                  <p className="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+                    <MarketplaceLogo source={product.source_name} size={12} />
+                    {marketplaceLabel(product.source_name)} · score {Math.round(numberValue(product.score))} · {formatMoney(product.discounted_price_brl)}
                     {comissao != null && (
                       <>
                         {" · "}

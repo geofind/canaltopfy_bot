@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/app/page-header";
 import { QueueForm } from "@/components/app/divulgacao-forms";
 import { QueueEditor, type QueueEditorItem } from "@/components/app/queue-editor";
+import { MarketplaceLogo } from "@/components/app/marketplace-logo";
 import { toggleQueue, deleteQueue } from "@/lib/actions";
 import { comissaoEstimadaPorUnidade } from "@/lib/commission";
 
@@ -55,13 +56,6 @@ function formatDuration(hours: number) {
   const h = Math.floor(safeMinutes / 60);
   const m = safeMinutes % 60;
   return `${h}h${String(m).padStart(2, "0")}`;
-}
-
-function sourceColor(source: string | null | undefined) {
-  if (source === "mercadolivre") return "bg-[#FFE600]";
-  if (source === "shopee") return "bg-[#EE4D2D]";
-  if (source === "magalu") return "bg-[#0086FF]";
-  return "bg-[#E52B37]";
 }
 
 export default async function FilasPage() {
@@ -172,10 +166,14 @@ export default async function FilasPage() {
                         key={item.id}
                         href={campaign?.id ? `/campanhas/${campaign.id}` : "/filas"}
                         title={`${index + 1}. ${campaign?.title ?? "Oferta"} — ${new Date(item.scheduled_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`}
-                        className={`grid size-4 shrink-0 place-items-center rounded-full ring-4 ring-white transition-transform hover:scale-150 focus-visible:scale-150 ${sourceColor(product?.source_name)}`}
+                        className="grid size-4 shrink-0 place-items-center overflow-hidden rounded-full ring-4 ring-white transition-transform hover:scale-150 focus-visible:scale-150"
                         aria-label={`Abrir próxima oferta ${index + 1}: ${campaign?.title ?? "sem título"}`}
                       >
-                        <span className="size-1 rounded-full bg-black/20" />
+                        <MarketplaceLogo
+                          source={product?.source_name}
+                          size={16}
+                          className="rounded-full"
+                        />
                       </Link>
                     );
                   })}
@@ -201,10 +199,22 @@ export default async function FilasPage() {
                   <div className="bg-[#0086FF]" style={{ width: `${magaluShare}%` }} />
                 </div>
                 <div className="mt-3 flex flex-wrap justify-between gap-2 text-[10px] text-muted-foreground">
-                  <span>AliExpress {queueBySource.aliexpress}</span>
-                  <span>Mercado Livre {queueBySource.mercadolivre}</span>
-                  <span>Shopee {queueBySource.shopee}</span>
-                  <span>Magalu {queueBySource.magalu}</span>
+                  <span className="inline-flex items-center gap-1">
+                    <MarketplaceLogo source="aliexpress" size={14} />
+                    AliExpress {queueBySource.aliexpress}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <MarketplaceLogo source="mercadolivre" size={14} />
+                    Mercado Livre {queueBySource.mercadolivre}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <MarketplaceLogo source="shopee" size={14} />
+                    Shopee {queueBySource.shopee}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <MarketplaceLogo source="magalu" size={14} />
+                    Magalu {queueBySource.magalu}
+                  </span>
                 </div>
               </div>
             </div>
